@@ -45,3 +45,18 @@ O Docker inicialmente retornou HTTP 500 na negociação API v1.56. A tentativa c
 PowerShell: $env:DOCKER_API_VERSION='1.45'; docker compose up -d
 Não foi necessário trocar LocalStack por MiniStack.
 Durante download/extração, a máquina ficou lenta e a primeira integração excedeu timeout; repetição após containers saudáveis passou.
+
+## Etapa 4 — Money
+
+Money encapsula decimal.js como Value Object imutável com campo privado ECMAScript e instância congelada. Contratos usam MoneyProps com amount string e currency. number perde precisão binária para centavos e inteiros grandes, por isso nenhuma conversão monetária para number é permitida.
+
+A política de entrada exige exatamente duas casas, sem espaços, sinal positivo, zeros à esquerda, expoentes ou separadores. Formatos 10 e 10.5 são rejeitados. from aceita valores não negativos e rejeita inclusive -0.00. rehydrate permite sinal negativo para reconstruir representações persistidas legítimas, mantendo validações de representação. subtract e negate podem produzir negativos. Zero é sempre serializado como 0.00. toString retorna apenas a quantia decimal e toJSON inclui a moeda.
+
+Moedas aceitas nesta entrega são o subconjunto ISO-4217 BRL e USD, em maiúsculas e sem normalização. A lista explícita evita aceitar códigos inexistentes apenas por terem três letras. A ampliação exige decisão e testes. Todas as operações binárias, inclusive equals e isLessThan, lançam CurrencyMismatchError quando as moedas divergem.
+
+O clone privado do Decimal usa 32 dígitos significativos e ROUND_HALF_EVEN, isolado da configuração global. O intervalo simétrico vai de -9999999999999999999999999999.99 a 9999999999999999999999999999.99, com 28 inteiros e dois decimais. Soma ou subtração dos operandos limitados exige no máximo 31 dígitos, portanto a precisão configurada preserva centavos inclusive antes de detectar overflow. Cada resultado fora do intervalo lança MoneyOutOfRangeError. A API oferece somente adição, subtração e negação, que preservam escala exata. toFixed(2) apenas formata resultados já exatos. Entradas com escala excedente são rejeitadas, sem arredondamento.
+
+A persistência futura deverá usar NUMERIC(30,2) e moeda em coluna separada, preservando strings no TypeORM e reconstruindo Money sem passar por number. Esse schema comporta o intervalo definido. O mapeamento e as migrations financeiras serão implementados na etapa correspondente.
+
+A configuração isolada segue a API de clone do decimal.js.
+https://mikemcl.github.io/decimal.js/#clone
