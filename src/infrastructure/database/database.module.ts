@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { databaseOptions } from './options.js';
+import { DataSource } from 'typeorm';
+import { TypeOrmFinancialTransaction } from './repositories/financial.repositories.js';
 
 @Module({
   imports: [
@@ -8,6 +10,14 @@ import { databaseOptions } from './options.js';
       useFactory: () => ({ ...databaseOptions(), manualInitialization: true }),
     }),
   ],
-  exports: [TypeOrmModule],
+  providers: [
+    {
+      provide: TypeOrmFinancialTransaction,
+      inject: [DataSource],
+      useFactory: (source: DataSource) =>
+        new TypeOrmFinancialTransaction(source),
+    },
+  ],
+  exports: [TypeOrmModule, TypeOrmFinancialTransaction],
 })
 export class DatabaseModule {}

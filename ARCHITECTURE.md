@@ -91,3 +91,36 @@ WagerTransaction.applyTo aplica regras locais a uma wallet já carregada e retor
 FailureCode contém INSUFFICIENT_FUNDS, INSUFFICIENT_REVERSAL_FUNDS, CURRENCY_MISMATCH, INVALID_AMOUNT, INVALID_REFERENCE, INVALID_REFERENCE_KIND, REFERENCE_CONTEXT_MISMATCH, REFERENCE_AMOUNT_MISMATCH, REFERENCE_NOT_FOUND, INVALID_KIND, EXTERNAL_OPENING_FORBIDDEN, INVALID_LEDGER, INVALID_TIMESTAMP e PERMANENT_INFRASTRUCTURE_FAILURE. Os códigos identificam falhas locais, expiração futura de referência ou falha permanente. InvalidTransactionStateError identifica uso incorreto de uma entidade terminal.
 
 A etapa de persistência deverá aplicar pessimistic locking por wallet no PostgreSQL. Wallet, transação, ledger, inbox e outbox participarão de uma única transação SQL. Também serão necessárias constraints de não-negatividade, imutabilidade e unicidade de wallet por player/moeda, lançamento por transação/wallet, idempotência e reversão por referência/tipo. Consultar reversões anteriores, resolver referências e evitar duplicatas entre instâncias continuam responsabilidades da aplicação e banco. Testes locais verificam invariantes em memória e reconstrução do saldo pelo ledger.
+
+## Etapa 6 — Persistência financeira
+
+As cinco tabelas são criadas pela migration explícita FinancialFoundation1797000000000. Entidades de persistência usam EntitySchema tipado, independente das classes do domínio. A opção evita depender da emissão de metadados durante testes TypeScript diretos e mantém todos os campos sob strict. synchronize e migrationsRun permanecem false. A migration é a autoridade do schema, inclusive triggers. Qualquer SQL gerado futuramente por migration:generate exige revisão, pois os EntitySchemas descrevem colunas e não replicam todas as constraints e triggers manuais.
+
+wallets guarda identidade, moeda, saldo NUMERIC(30,2), versão e datas. UNIQUE(player_id,currency) garante uma carteira por jogador e moeda. UNIQUE(id,player_id,currency) é necessário para a FK composta que impede transações com contexto de wallet divergente. Checks restringem BRL/USD, saldo não negativo, NaN e versão mínima 1. Infinity não cabe no NUMERIC com precisão limitada.
+
+wager_transactions guarda identidade, hash, contexto, referência externa opcional, referência interna por FK, estado, código de falha e datas. A key de idempotência externa tem escopo global, pois o desafio define o header como fonte da verdade e recomenda incluir provider na própria key. Há constraints separadas para key e par provider/external ID. A identidade interna de OPENING reserva provider internal e prefixo opening: para keys internas, com external ID igual ao ID interno. Integrações externas deverão rejeitar esse namespace reservado. Essa restrição evita colisões com a representação interna já adotada pelo domínio.
+
+O resultado original usa result_balance NUMERIC(30,2) e result_version, associados à moeda da transação, obrigatórios em PROCESSED. Replays usarão esse snapshot sem ler o saldo atual. Transações terminais têm atualização bloqueada, protegendo também o snapshot. Pendências têm reference_attempts e next_attempt_at e índice parcial por vencimento, data e ID. Referências internas PROCESSED são validadas por trigger quanto a identidade, contexto, status, tipo e reversão integral. O índice único parcial uq_wager_processed_reversal protege (reference_transaction_id,kind) somente para REFUND/ROLLBACK PROCESSED. Tentativas rejeitadas continuam auditáveis.
+
+wallet_ledger_entries tem FKs sem cascade delete, UNIQUE(wallet_id,transaction_id), checks de direção, quantia positiva, saldos não negativos e equação financeira. Trigger de inserção confere transação PROCESSED, wallet, moeda, montante e direção esperada, excluindo LOSS. Índice (wallet_id,created_at,id) prepara consulta estável e reconciliação. Triggers BEFORE UPDATE/DELETE e BEFORE TRUNCATE rejeitam alterações. O proprietário e superusuários ainda podem remover ou desabilitar triggers ou alterar schema. Produção deverá executar aplicação sem privilégios administrativos e usar outro papel para migrations.
+
+inbox_messages tem PK(consumer_name,message_id), hash e timestamps. outbox_messages tem envelope JSONB, agregado, tipo, data, tentativas, próximo envio e publicação. O índice parcial de pendentes prepara lockDue com FOR UPDATE SKIP LOCKED. Nenhum fluxo de consumo ou publicação é executado por esses adaptadores.
+
+Os mappers persistem quantias como strings e reconstroem Money por rehydrate e entidades por suas factories rehydrate. Não há parser pg para converter NUMERIC em number. PostgreSQL pode arredondar escala excedente ao converter para NUMERIC(30,2), antes de executar checks. A validação estrita de escala continua no Money. SQL direto exige o mesmo cuidado na fronteira de escrita.
+
+TypeOrmFinancialTransaction.run executa READ COMMITTED e entrega repositórios criados exclusivamente com o EntityManager daquela transação. Escritas e locks exigem QueryRunner ativo. findByIdForUpdate emite SELECT FOR UPDATE para uma wallet. Aquisição futura de múltiplas wallets deverá seguir ordem lexicográfica de ID, antes de gravar transações e ledger. Chamadas externas devem ocorrer fora desse bloco. O caso de uso deverá carregar com lock antes de modificar e persistir a wallet. A infraestrutura permite essa disciplina, enquanto o fluxo financeiro completo será desenvolvido na etapa seguinte.
+
+Os adaptadores oferecem insert explícito, buscas por identidade e idempotência, consulta de reversão processada, persistência de transições/snapshot e paginação estável do ledger. Ledger não oferece update, delete, save ou upsert. Inbox oferece insert/find e outbox insert/lockDue. O contexto transacional permite confirmar ou desfazer todas essas escritas juntas.
+
+Conflitos 23505 devem ser distinguidos pelo nome de constraint. uq_wager_idempotency e uq_wager_provider_external exigirão nova leitura e comparação de identidade/hash depois do rollback, em nova transação. uq_wager_processed_reversal é conflito de reversão, não replay. O erro deve sair do callback run para o TypeORM desfazer a transação abortada. Não se deve capturar violação SQL e continuar usando o mesmo EntityManager sem rollback ou savepoint.
+
+Testes criam um banco exclusivo wager_test_<uuid>, executam migration:run, migration:revert e migration:run pelo CLI com Bun, e removem somente esse banco. O usuário PostgreSQL de testes precisa de CREATEDB. Os testes verificam SQL inválido diretamente, round trips, snapshot, rollback das cinco tabelas e duas conexões com sincronização por pg_blocking_pids. Os testes de duplicatas 50 vezes e três instâncias serão realizados com o caso de uso futuro.
+
+Validação executada nesta etapa
+- docker compose config e ps aprovados, PostgreSQL e LocalStack saudáveis.
+- Build, typecheck e lint aprovados.
+- 179 testes unitários e 37 testes de integração aprovados.
+- Suíte completa com 216 testes aprovados.
+- CLI migration:run, migration:revert e migration:run executados com sucesso em bancos temporários isolados.
+- git diff --check aprovado, com avisos de normalização CRLF/LF nos documentos.
+- O sandbox exigiu permissão ampliada para subprocessos Bun dos testes de migrations. A criação do banco temporário usa timeout maior que o das consultas normais.

@@ -53,7 +53,7 @@ O teste de metadados usa o JavaScript compilado. Injeções de tokens em código
 
 ## Migrations
 
-Nenhuma entidade ou migration de negócio existe ainda.
+A migration FinancialFoundation1797000000000 cria o schema financeiro inicial.
 
     bun run migration:show
     bun run migration:generate ./src/infrastructure/database/migrations/Nome
@@ -63,4 +63,42 @@ Nenhuma entidade ou migration de negócio existe ainda.
 Os scripts compilam antes de chamar o CLI TypeORM com Bun e DataSource em dist.
 Após gerar uma migration TypeScript, o próximo build compila o arquivo antes de aplicar.
 Migrations devem implementar up/down reversíveis. Não há migrations automáticas na inicialização.
-Não foi aplicada ou revertida migration financeira nesta etapa.
+A reversibilidade é testada pelo CLI em banco temporário isolado.
+
+## Persistência financeira
+
+A migration inicial cria wallets, wager_transactions, wallet_ledger_entries, inbox_messages e outbox_messages.
+Saldo e quantias usam NUMERIC(30,2), preservados como strings nos mappers. Money valida a escala antes da persistência, pois PostgreSQL arredonda entradas com escala excedente.
+
+Wallets têm unicidade por jogador/moeda e checks de saldo e versão.
+Transações têm unicidade por provider/external ID e idempotency key, snapshot de resultado original e agendamento de referências pendentes.
+Reversões PROCESSED têm unicidade parcial por referência/tipo.
+O ledger valida aritmética, contexto e imutabilidade por triggers, incluindo TRUNCATE.
+Inbox e outbox possuem schema e adaptadores preparatórios.
+
+O bloco TypeOrmFinancialTransaction.run compartilha um EntityManager READ COMMITTED entre os cinco repositórios.
+A consulta de wallet com lock exige transação ativa. Adquira locks por ID em ordem consistente e execute chamadas externas fora do bloco.
+O snapshot result_balance/result_version permite replay sem consultar o saldo atual.
+O namespace provider internal e as keys opening: são reservados para abertura.
+
+Com infraestrutura saudável, execute
+
+    bun run build
+    bun run typecheck
+    bun run lint
+    bun run test:unit
+    bun run test:integration
+    bun test
+
+Os testes financeiros criam e removem um banco temporário exclusivo, com nome wager_test_<uuid>, usando as credenciais de desenvolvimento e exigindo permissão CREATEDB. Eles executam os scripts reais migration:run, migration:revert e migration:run com POSTGRES_DB direcionado ao banco temporário. O banco de desenvolvimento permanece preservado.
+
+Para aplicar a migration no banco indicado pelo seu ambiente, execute
+
+    bun run migration:show
+    bun run migration:run
+    bun run migration:revert
+
+Revert remove as cinco tabelas financeiras e seus dados. Use somente no banco pretendido. Os testes de reversibilidade usam exclusivamente o banco temporário.
+Os esquemas TypeORM registram colunas. Revise migrations geradas para preservar constraints e triggers implementadas manualmente.
+
+As garantias de processamento completo, replay HTTP/SQS, eventos, workers e múltiplas instâncias dependem das etapas seguintes.

@@ -1,13 +1,14 @@
 import type { DataSourceOptions } from 'typeorm';
+import { financialEntities } from './entities/financial.schemas.js';
 import { environment } from '../config/environment.js';
 
-export function databaseOptions(): DataSourceOptions {
+export function databaseOptions(): Extract<DataSourceOptions, { type: 'postgres' }> {
   return {
     type: 'postgres',
     ...environment().database,
     synchronize: false,
     migrationsRun: false,
-    entities: [import.meta.dirname + '/entities/**/*.js'],
+    entities: financialEntities,
     migrations: [import.meta.dirname + '/migrations/**/*.js'],
     poolSize: 3,
     connectTimeoutMS: 2000,
