@@ -61,7 +61,10 @@ export class HealthController {
         }),
         { abortSignal: AbortSignal.timeout(2500) },
       );
-      if (Attributes?.FifoQueue !== 'true') throw new Error('Queue not ready');
+
+      if (Attributes?.FifoQueue !== 'true') {
+        throw new Error('Queue not ready');
+      }
     }
   }
 }

@@ -44,36 +44,56 @@ export interface OpeningTransactionProps {
 }
 
 export class WagerTransaction {
-  readonly #props: Readonly<Omit<CreateWagerTransactionProps, 'createdAt'>>;
+  readonly id: string;
+  readonly providerId: string;
+  readonly externalTransactionId: string;
+  readonly idempotencyKey: string;
+  readonly payloadHash: string;
+  readonly walletId: string;
+  readonly playerId: string;
+  readonly roundId: string;
+  readonly gameId: string;
+  readonly kind: Kind;
+  readonly money: Money;
+  readonly referenceExternalTransactionId: string | undefined;
+
   readonly #createdAt: number;
+
   #status: Status;
   #referenceTransactionId: string | undefined;
   #failureCode: FailureCode | undefined;
   #processedAt: number | undefined;
 
   private constructor(state: WagerTransactionState) {
-    const {
-      status,
-      referenceTransactionId,
-      failureCode,
-      processedAt,
-      createdAt,
-      ...props
-    } = state;
+    this.id = state.id;
+    this.providerId = state.providerId;
+    this.externalTransactionId = state.externalTransactionId;
+    this.idempotencyKey = state.idempotencyKey;
+    this.payloadHash = state.payloadHash;
+    this.walletId = state.walletId;
+    this.playerId = state.playerId;
+    this.roundId = state.roundId;
+    this.gameId = state.gameId;
+    this.kind = state.kind;
+    this.money = state.money;
+    this.referenceExternalTransactionId = state.referenceExternalTransactionId;
 
-    this.#props = Object.freeze(props);
-    this.#createdAt = timestamp(createdAt);
-    this.#status = status;
-    this.#referenceTransactionId = referenceTransactionId;
-    this.#failureCode = failureCode;
+    this.#createdAt = timestamp(state.createdAt);
+    this.#status = state.status;
+    this.#referenceTransactionId = state.referenceTransactionId;
+    this.#failureCode = state.failureCode;
     this.#processedAt =
-      processedAt === undefined ? undefined : timestamp(processedAt);
+      state.processedAt === undefined
+        ? undefined
+        : timestamp(state.processedAt);
+
     Object.freeze(this);
   }
 
   static create(props: CreateWagerTransactionProps): WagerTransaction {
-    if (props.kind === Kind.Opening)
+    if (props.kind === Kind.Opening) {
       throw new FinancialRuleError(FailureCode.ExternalOpeningForbidden);
+    }
 
     return WagerTransaction.newPending(props);
   }
@@ -93,19 +113,24 @@ export class WagerTransaction {
   private static newPending(
     props: CreateWagerTransactionProps,
   ): WagerTransaction {
-    if (!Object.values(Kind).includes(props.kind))
+    if (!Object.values(Kind).includes(props.kind)) {
       throw new FinancialRuleError(FailureCode.InvalidKind);
+    }
     // LOSS records an outcome and accepts any nonnegative amount.
+
     if (
       props.money.isNegative() ||
       (props.kind !== Kind.Loss && !props.money.isPositive())
-    )
+    ) {
       throw new FinancialRuleError(FailureCode.InvalidAmount);
+    }
+
     if (
       (props.kind === Kind.Refund || props.kind === Kind.Rollback) &&
       !props.referenceExternalTransactionId?.trim()
-    )
+    ) {
       throw new FinancialRuleError(FailureCode.InvalidReference);
+    }
 
     return new WagerTransaction({ ...props, status: Status.Pending });
   }
@@ -114,71 +139,23 @@ export class WagerTransaction {
     return new WagerTransaction(state);
   }
 
-  get id() {
-    return this.#props.id;
-  }
-
-  get providerId() {
-    return this.#props.providerId;
-  }
-
-  get externalTransactionId() {
-    return this.#props.externalTransactionId;
-  }
-
-  get idempotencyKey() {
-    return this.#props.idempotencyKey;
-  }
-
-  get payloadHash() {
-    return this.#props.payloadHash;
-  }
-
-  get walletId() {
-    return this.#props.walletId;
-  }
-
-  get playerId() {
-    return this.#props.playerId;
-  }
-
-  get roundId() {
-    return this.#props.roundId;
-  }
-
-  get gameId() {
-    return this.#props.gameId;
-  }
-
-  get kind() {
-    return this.#props.kind;
-  }
-
-  get money() {
-    return this.#props.money;
-  }
-
-  get referenceExternalTransactionId() {
-    return this.#props.referenceExternalTransactionId;
-  }
-
-  get createdAt() {
+  get createdAt(): Date {
     return new Date(this.#createdAt);
   }
 
-  get status() {
+  get status(): Status {
     return this.#status;
   }
 
-  get referenceTransactionId() {
+  get referenceTransactionId(): string | undefined {
     return this.#referenceTransactionId;
   }
 
-  get failureCode() {
+  get failureCode(): FailureCode | undefined {
     return this.#failureCode;
   }
 
-  get processedAt() {
+  get processedAt(): Date | undefined {
     return this.#processedAt === undefined
       ? undefined
       : new Date(this.#processedAt);
@@ -186,8 +163,10 @@ export class WagerTransaction {
 
   markProcessed(referenceTransactionId: string | undefined, at: Date): void {
     this.assertMutable();
-    if (this.requiresReference() && !referenceTransactionId)
+
+    if (this.requiresReference() && !referenceTransactionId) {
       throw new FinancialRuleError(FailureCode.InvalidReference);
+    }
 
     const processedAt = timestamp(at);
 
@@ -198,8 +177,10 @@ export class WagerTransaction {
 
   markPendingReference(): void {
     this.assertMutable();
-    if (!this.referenceExternalTransactionId)
+
+    if (!this.referenceExternalTransactionId) {
       throw new InvalidTransactionStateError();
+    }
 
     this.#status = Status.PendingReference;
   }
@@ -241,39 +222,51 @@ export class WagerTransaction {
       reference.id === this.id ||
       reference.externalTransactionId !== this.referenceExternalTransactionId ||
       reference.status !== Status.Processed
-    )
+    ) {
       throw new FinancialRuleError(FailureCode.InvalidReference);
+    }
+
     if (
       reference.providerId !== this.providerId ||
       reference.playerId !== this.playerId ||
       reference.walletId !== this.walletId ||
       reference.money.currency !== this.money.currency ||
       reference.roundId !== this.roundId
-    )
+    ) {
       throw new FinancialRuleError(FailureCode.ReferenceContextMismatch);
+    }
 
     const allowed =
       this.kind === Kind.Rollback
         ? [Kind.Bet, Kind.Win, Kind.Refund]
         : [Kind.Bet];
-    if (!allowed.includes(reference.kind))
+
+    if (!allowed.includes(reference.kind)) {
       throw new FinancialRuleError(FailureCode.InvalidReferenceKind);
-    if (this.requiresReference() && !this.money.equals(reference.money))
+    }
+
+    if (this.requiresReference() && !this.money.equals(reference.money)) {
       throw new FinancialRuleError(FailureCode.ReferenceAmountMismatch);
+    }
   }
 
   ledgerDirectionFor(reference?: WagerTransaction): LedgerDirection {
-    if (!this.affectsBalance())
+    if (!this.affectsBalance()) {
       throw new FinancialRuleError(FailureCode.InvalidLedger);
+    }
+
     if (this.requiresReference()) {
-      if (!reference)
+      if (!reference) {
         throw new FinancialRuleError(FailureCode.ReferenceNotFound);
+      }
 
       this.validateReference(reference);
-      if (this.kind === Kind.Rollback)
+
+      if (this.kind === Kind.Rollback) {
         return reference.kind === Kind.Bet
           ? LedgerDirection.Credit
           : LedgerDirection.Debit;
+      }
     }
 
     return this.kind === Kind.Bet
@@ -289,12 +282,19 @@ export class WagerTransaction {
   ): WalletLedgerEntry | undefined {
     this.assertMutable();
     timestamp(context.at);
-    if (reference && !this.referenceExternalTransactionId)
+
+    if (reference && !this.referenceExternalTransactionId) {
       throw new FinancialRuleError(FailureCode.InvalidReference);
-    if (wallet.id !== this.walletId || wallet.playerId !== this.playerId)
+    }
+
+    if (wallet.id !== this.walletId || wallet.playerId !== this.playerId) {
       throw new FinancialRuleError(FailureCode.ReferenceContextMismatch);
-    if (wallet.currency !== this.money.currency)
+    }
+
+    if (wallet.currency !== this.money.currency) {
       throw new FinancialRuleError(FailureCode.CurrencyMismatch);
+    }
+
     if (this.referenceExternalTransactionId) {
       if (!reference) {
         this.markPendingReference();
@@ -304,6 +304,7 @@ export class WagerTransaction {
 
       this.validateReference(reference);
     }
+
     if (!this.affectsBalance()) {
       this.markProcessed(reference?.id, context.at);
 
@@ -311,15 +312,17 @@ export class WagerTransaction {
     }
 
     const direction = this.ledgerDirectionFor(reference);
+
     if (
       direction === LedgerDirection.Debit &&
       wallet.balance.isLessThan(this.money)
-    )
+    ) {
       throw new FinancialRuleError(
         this.kind === Kind.Rollback
           ? FailureCode.InsufficientReversalFunds
           : FailureCode.InsufficientFunds,
       );
+    }
 
     const movement = { ...context, transactionId: this.id };
 
@@ -333,6 +336,8 @@ export class WagerTransaction {
   }
 
   private assertMutable(): void {
-    if (this.isTerminal()) throw new InvalidTransactionStateError();
+    if (this.isTerminal()) {
+      throw new InvalidTransactionStateError();
+    }
   }
 }

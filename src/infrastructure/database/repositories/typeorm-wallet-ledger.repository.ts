@@ -19,14 +19,17 @@ export class TypeOrmLedgerRepository implements LedgerRepository {
     limit = 50,
     after?: { createdAt: Date; id: string },
   ) {
-    if (!Number.isInteger(limit) || limit < 1 || limit > 1000)
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1000) {
       throw new Error('Invalid ledger limit');
+    }
 
     const query = this.manager
       .createQueryBuilder(LedgerRowSchema, 'entry')
       .where('entry.wallet_id = :walletId', { walletId });
-    if (after)
+
+    if (after) {
       query.andWhere('(entry.created_at, entry.id) > (:createdAt, :id)', after);
+    }
 
     const rows = await query
       .orderBy('entry.created_at', 'ASC')

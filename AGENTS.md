@@ -62,7 +62,7 @@
 - Logs JSON devem incluir os identificadores de correlação aplicáveis, sem segredos, dados sensíveis ou payloads financeiros completos.
 - Cubra métricas de status, duplicatas, retries, DLQ, conflitos de lock, outbox lag e latência. Readiness verifica PostgreSQL e SQS; liveness verifica o processo.
 - Autenticação é opcional e não pontua: se omitida, documente desenho e ponto de extensão; se implementada, integre IdP externo, sem autenticação artesanal. Health permanece aberto; mensagens internas ainda exigem validações de domínio.
-- Observe já está no template, mas sua presença não comprova atendimento da observabilidade obrigatória. Não exponha credenciais; em investigações de produção, use traces/logs reais disponíveis, sem presumir comportamento apenas pelo código.
+- O Observe foi removido do template. A observabilidade obrigatória deverá ser implementada conforme o CHALLENGE.md, utilizando logs estruturados, métricas e correlação, sem introduzir dependências desnecessárias.
 
 ## Testes e validação
 
@@ -83,3 +83,21 @@
 - Separe testes, hooks e blocos de teste com linhas em branco. Organize preparação, execução e verificação com espaçamento, preservando grupos de assertions relacionadas.
 - Preserve as configurações existentes do Prettier e do lint. Evite linhas em branco excessivas e comentários usados apenas como separadores.
 - Aplique essas convenções também a novos controllers, DTOs, consumers, publishers, workers e testes.
+
+## Encapsulamento das entidades de domínio
+
+- Prefira propriedades públicas readonly para valores imutáveis simples e Value Objects comprovadamente imutáveis.
+- Use campos privados nativos # para estados internos mutáveis e representações internas protegidas.
+- Use getters para ler estado privado, calcular valores derivados ou fornecer cópias defensivas. Evite getters repetitivos para propriedades imutáveis simples.
+- Altere estado exclusivamente por métodos de negócio, preservando invariantes financeiras e sem setters públicos que contornem essas regras.
+- Preserve imutabilidade em tempo de execução quando exigida. readonly não impede mutações em JavaScript e Object.freeze não congela objetos internos recursivamente.
+- Proteja datas e outras estruturas mutáveis com cópias defensivas na entrada e saída quando necessário.
+- Preserve contratos públicos e use serialização explícita. Avalie enumerabilidade e os efeitos de Object.keys, spread e JSON.stringify ao mudar getters para propriedades.
+- Aplique essas convenções também às futuras InboxMessage, OutboxMessage e IntegrationEvent.
+
+## Blocos de controle e métodos
+
+- Use chaves em todos os blocos if, else, for, while e demais estruturas de controle, inclusive quando contiverem apenas uma instrução.
+- Separe blocos de validação independentes com uma linha em branco.
+- Declare explicitamente os tipos de retorno de métodos públicos, getters e factories das entidades de domínio.
+- Mantenha métodos simples e coesos. Extraia pequenas operações para métodos auxiliares somente quando houver benefício real de legibilidade ou reutilização.

@@ -15,35 +15,55 @@ export interface LedgerEntryState {
 }
 
 export class WalletLedgerEntry {
-  readonly #state: Readonly<Omit<LedgerEntryState, 'createdAt'>>;
+  readonly id: string;
+  readonly walletId: string;
+  readonly transactionId: string;
+  readonly direction: LedgerDirection;
+  readonly money: Money;
+  readonly balanceBefore: Money;
+  readonly balanceAfter: Money;
+
   readonly #createdAt: number;
 
   private constructor(state: LedgerEntryState) {
-    const { createdAt, ...fields } = state;
+    this.id = state.id;
+    this.walletId = state.walletId;
+    this.transactionId = state.transactionId;
+    this.direction = state.direction;
+    this.money = state.money;
+    this.balanceBefore = state.balanceBefore;
+    this.balanceAfter = state.balanceAfter;
 
-    this.#state = Object.freeze(fields);
-    this.#createdAt = timestamp(createdAt);
+    this.#createdAt = timestamp(state.createdAt);
+
     Object.freeze(this);
   }
 
   static create(state: LedgerEntryState): WalletLedgerEntry {
-    if (!Object.values(LedgerDirection).includes(state.direction))
+    if (!Object.values(LedgerDirection).includes(state.direction)) {
       throw new FinancialRuleError(FailureCode.InvalidLedger);
+    }
+
     if (
       state.money.currency !== state.balanceBefore.currency ||
       state.money.currency !== state.balanceAfter.currency
-    )
+    ) {
       throw new FinancialRuleError(FailureCode.CurrencyMismatch);
+    }
+
     if (
       !state.money.isPositive() ||
       state.balanceBefore.isNegative() ||
       state.balanceAfter.isNegative()
-    )
+    ) {
       throw new FinancialRuleError(FailureCode.InvalidAmount);
+    }
 
     const entry = new WalletLedgerEntry(state);
-    if (!entry.isBalanced())
+
+    if (!entry.isBalanced()) {
       throw new FinancialRuleError(FailureCode.InvalidLedger);
+    }
 
     return entry;
   }
@@ -52,35 +72,7 @@ export class WalletLedgerEntry {
     return new WalletLedgerEntry(state);
   }
 
-  get id() {
-    return this.#state.id;
-  }
-
-  get walletId() {
-    return this.#state.walletId;
-  }
-
-  get transactionId() {
-    return this.#state.transactionId;
-  }
-
-  get direction() {
-    return this.#state.direction;
-  }
-
-  get money() {
-    return this.#state.money;
-  }
-
-  get balanceBefore() {
-    return this.#state.balanceBefore;
-  }
-
-  get balanceAfter() {
-    return this.#state.balanceAfter;
-  }
-
-  get createdAt() {
+  get createdAt(): Date {
     return new Date(this.#createdAt);
   }
 

@@ -23,7 +23,9 @@ export class Money {
   public readonly currency: string;
 
   private constructor(value: Decimal, currency: string) {
-    if (value.abs().greaterThan(maximum)) throw new MoneyOutOfRangeError();
+    if (value.abs().greaterThan(maximum)) {
+      throw new MoneyOutOfRangeError();
+    }
 
     this.#value = value.isZero() ? new MoneyDecimal('0') : value;
     this.currency = currency;
@@ -32,8 +34,10 @@ export class Money {
 
   static from(props: MoneyProps): Money {
     const money = Money.rehydrate(props);
-    if (money.isNegative() || props.amount.startsWith('-'))
+
+    if (money.isNegative() || props.amount.startsWith('-')) {
       throw new InvalidMoneyAmountError();
+    }
 
     return money;
   }
@@ -45,11 +49,16 @@ export class Money {
     ) {
       throw new InvalidMoneyAmountError();
     }
-    if (props.currency !== 'BRL' && props.currency !== 'USD')
+
+    if (props.currency !== 'BRL' && props.currency !== 'USD') {
       throw new InvalidCurrencyError();
+    }
 
     const unsigned = props.amount.replace(/^-/, '');
-    if (unsigned.length > 31) throw new MoneyOutOfRangeError();
+
+    if (unsigned.length > 31) {
+      throw new MoneyOutOfRangeError();
+    }
 
     return new Money(new MoneyDecimal(props.amount), props.currency);
   }
@@ -107,6 +116,8 @@ export class Money {
   }
 
   private assertSameCurrency(other: Money): void {
-    if (this.currency !== other.currency) throw new CurrencyMismatchError();
+    if (this.currency !== other.currency) {
+      throw new CurrencyMismatchError();
+    }
   }
 }

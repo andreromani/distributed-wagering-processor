@@ -52,6 +52,9 @@ export class TypeOrmWalletRepository implements WalletRepository {
         updated_at: wallet.updatedAt,
       },
     );
-    if (result.affected !== 1) throw new Error('Wallet not found');
+
+    if (result.affected !== 1) {
+      throw new Error('Wallet not found');
+    }
   }
 }

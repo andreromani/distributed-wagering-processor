@@ -27,8 +27,9 @@ export class TypeOrmOutboxRepository {
   async lockDue(now: Date, limit: number): Promise<OutboxRecord[]> {
     requireTransaction(this.manager);
 
-    if (!Number.isInteger(limit) || limit < 1 || limit > 1000)
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1000) {
       throw new Error('Invalid outbox limit');
+    }
 
     const rows = await this.manager
       .createQueryBuilder(OutboxRowSchema, 'message')

@@ -1,7 +1,5 @@
 import type { WalletRepository } from '../../domain/repositories/wallet.repository.js';
-
 import type { WagerTransactionRepository } from '../../domain/repositories/wager-transaction.repository.js';
-
 import type { LedgerRepository } from '../../domain/repositories/wallet-ledger.repository.js';
 
 export interface InboxRecord {

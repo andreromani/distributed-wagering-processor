@@ -88,11 +88,15 @@ test('operands and serialized copies remain independent', () => {
 
 test('repeated arithmetic is exact', () => {
   let value = Money.zero('BRL');
-  for (let i = 0; i < 1000; i++) value = value.add(brl('0.01'));
+  for (let i = 0; i < 1000; i++) {
+    value = value.add(brl('0.01'));
+  }
 
   expect(value.toString()).toBe('10.00');
 
-  for (let i = 0; i < 1000; i++) value = value.subtract(brl('0.01'));
+  for (let i = 0; i < 1000; i++) {
+    value = value.subtract(brl('0.01'));
+  }
 
   expect(value.toString()).toBe('0.00');
 });

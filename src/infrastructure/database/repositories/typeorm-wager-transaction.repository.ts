@@ -21,7 +21,9 @@ import {
 import { requireTransaction } from './transaction-context.js';
 
 function stored(row: WagerRow | null): StoredWager | undefined {
-  if (!row) return undefined;
+  if (!row) {
+    return undefined;
+  }
 
   return {
     transaction: wagerFromRow(row),
@@ -41,8 +43,9 @@ function stored(row: WagerRow | null): StoredWager | undefined {
 }
 
 function snapshot(transaction: WagerTransaction, result?: OriginalResult) {
-  if (result && result.balance.currency !== transaction.money.currency)
+  if (result && result.balance.currency !== transaction.money.currency) {
     throw new Error('Snapshot currency mismatch');
+  }
 
   return {
     result_balance: result?.balance.toString() ?? null,
@@ -126,6 +129,9 @@ export class TypeOrmWagerTransactionRepository implements WagerTransactionReposi
           : { next_attempt_at: options.nextAttemptAt }),
       },
     );
-    if (result.affected !== 1) throw new Error('Transaction not found');
+
+    if (result.affected !== 1) {
+      throw new Error('Transaction not found');
+    }
   }
 }

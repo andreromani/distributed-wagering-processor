@@ -124,3 +124,11 @@ Validação executada nesta etapa
 - CLI migration:run, migration:revert e migration:run executados com sucesso em bancos temporários isolados.
 - git diff --check aprovado, com avisos de normalização CRLF/LF nos documentos.
 - O sandbox exigiu permissão ampliada para subprocessos Bun dos testes de migrations. A criação do banco temporário usa timeout maior que o das consultas normais.
+
+## Etapa 6.2 — Encapsulamento simplificado
+
+Wallet expõe id, playerId e currency como readonly. WagerTransaction expõe os identificadores, hash, contexto, kind, Money e referência externa como readonly. WalletLedgerEntry expõe identidade, direção, Money e saldos como readonly. Object.freeze(this) protege esses campos em tempo de execução. Campos privados nativos continuam permitindo somente as mutações realizadas pelos métodos da própria classe.
+
+Saldo, versão e estado da transação permanecem privados com getters de leitura. Datas são armazenadas como timestamps privados e retornadas por cópias defensivas. Money mantém Decimal privado e sua representação exata.
+
+A consulta dos usos existentes de Object.keys, spread e JSON.stringify em src e test confirmou que as três entidades são persistidas por mappers explícitos. Nenhum contrato de transporte existente depende da serialização implícita dessas entidades. Com os campos readonly públicos, Object.keys e spread passam a enumerar os campos imutáveis e JSON.stringify passa a incluí-los, usando Money.toJSON para quantias. Estado privado e datas continuam fora dessa enumeração. A referência externa undefined aparece em Object.keys e spread, mas é omitida pelo JSON. Esse efeito foi documentado e coberto por testes próprios. Os mappers continuam sendo a fronteira explícita de persistência e não utilizam essa enumeração.

@@ -1,20 +1,27 @@
 export function environment(env: NodeJS.ProcessEnv = process.env) {
   const get = (name: string): string => {
     const value = env[name];
-    if (!value?.trim()) throw new Error('Missing variable: ' + name);
+
+    if (!value?.trim()) {
+      throw new Error('Missing variable: ' + name);
+    }
 
     return value;
   };
   const port = (name: string) => {
     const value = get(name);
-    if (!/^\d+$/.test(value) || Number(value) < 1 || Number(value) > 65535)
+
+    if (!/^\d+$/.test(value) || Number(value) < 1 || Number(value) > 65535) {
       throw new Error('Invalid ' + name);
+    }
 
     return Number(value);
   };
   const endpoint = new URL(get('SQS_ENDPOINT'));
-  if (!['http:', 'https:'].includes(endpoint.protocol))
+
+  if (!['http:', 'https:'].includes(endpoint.protocol)) {
     throw new Error('Invalid SQS_ENDPOINT');
+  }
 
   return {
     port: port('PORT'),

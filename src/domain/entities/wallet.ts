@@ -34,24 +34,26 @@ export interface OpenWalletProps {
 }
 
 export class Wallet {
-  readonly #identity: Readonly<
-    Pick<WalletState, 'id' | 'playerId' | 'currency'>
-  >;
+  readonly id: string;
+  readonly playerId: string;
+  readonly currency: string;
+
   readonly #createdAt: number;
+
   #balance: Money;
   #version: number;
   #updatedAt: number;
 
   private constructor(state: WalletState) {
-    this.#identity = Object.freeze({
-      id: state.id,
-      playerId: state.playerId,
-      currency: state.currency,
-    });
+    this.id = state.id;
+    this.playerId = state.playerId;
+    this.currency = state.currency;
+
     this.#balance = state.balance;
     this.#version = state.version;
     this.#createdAt = timestamp(state.createdAt);
     this.#updatedAt = timestamp(state.updatedAt);
+
     Object.freeze(this);
   }
 
@@ -60,8 +62,9 @@ export class Wallet {
     openingTransaction?: WagerTransaction;
     openingEntry?: WalletLedgerEntry;
   } {
-    if (props.initialBalance.isNegative())
+    if (props.initialBalance.isNegative()) {
       throw new FinancialRuleError(FailureCode.InvalidAmount);
+    }
 
     const wallet = new Wallet({
       id: props.id,
@@ -72,9 +75,14 @@ export class Wallet {
       createdAt: props.at,
       updatedAt: props.at,
     });
-    if (props.initialBalance.isZero()) return { wallet };
-    if (!props.opening)
+
+    if (props.initialBalance.isZero()) {
+      return { wallet };
+    }
+
+    if (!props.opening) {
       throw new FinancialRuleError(FailureCode.InvalidReference);
+    }
 
     const openingTransaction = WagerTransaction.opening({
       id: props.opening.transactionId,
@@ -103,38 +111,28 @@ export class Wallet {
     return new Wallet(state);
   }
 
-  get id() {
-    return this.#identity.id;
-  }
-
-  get playerId() {
-    return this.#identity.playerId;
-  }
-
-  get currency() {
-    return this.#identity.currency;
-  }
-
-  get balance() {
+  get balance(): Money {
     return this.#balance;
   }
 
-  get version() {
+  get version(): number {
     return this.#version;
   }
 
-  get createdAt() {
+  get createdAt(): Date {
     return new Date(this.#createdAt);
   }
 
-  get updatedAt() {
+  get updatedAt(): Date {
     return new Date(this.#updatedAt);
   }
 
   debit(money: Money, context: MovementContext): WalletLedgerEntry {
     this.assertMovement(money);
-    if (this.balance.isLessThan(money))
+
+    if (this.balance.isLessThan(money)) {
       throw new FinancialRuleError(FailureCode.InsufficientFunds);
+    }
 
     return this.move(
       money,
@@ -181,9 +179,12 @@ export class Wallet {
   }
 
   private assertMovement(money: Money): void {
-    if (money.currency !== this.currency)
+    if (money.currency !== this.currency) {
       throw new FinancialRuleError(FailureCode.CurrencyMismatch);
-    if (!money.isPositive())
+    }
+
+    if (!money.isPositive()) {
       throw new FinancialRuleError(FailureCode.InvalidAmount);
+    }
   }
 }

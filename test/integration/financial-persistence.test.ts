@@ -53,7 +53,10 @@ async function cli(command: string) {
     new Response(child.stderr).text(),
     child.exited,
   ]);
-  if (code !== 0) throw new Error(command + ' failed: ' + out + err);
+
+  if (code !== 0) {
+    throw new Error(command + ' failed: ' + out + err);
+  }
 }
 
 beforeAll(async () => {
@@ -84,10 +87,14 @@ beforeAll(async () => {
 }, 180000);
 
 afterAll(async () => {
-  if (source.isInitialized) await source.destroy();
+  if (source.isInitialized) {
+    await source.destroy();
+  }
+
   if (admin.isInitialized) {
-    if (!/^wager_test_[a-f0-9]{32}$/.test(database))
+    if (!/^wager_test_[a-f0-9]{32}$/.test(database)) {
       throw new Error('Unsafe test database name');
+    }
 
     await admin.query(
       'DROP DATABASE IF EXISTS "' + database + '" WITH (FORCE)',
@@ -181,7 +188,9 @@ async function expectFailure(
 
   expect(failure).toBeInstanceOf(Error);
 
-  if (failure instanceof Error) expect(failure.message).toContain(message);
+  if (failure instanceof Error) {
+    expect(failure.message).toContain(message);
+  }
 }
 
 async function rejected(
@@ -198,14 +207,17 @@ async function rejected(
 
   expect(failure).toBeInstanceOf(QueryFailedError);
 
-  if (!(failure instanceof QueryFailedError))
+  if (!(failure instanceof QueryFailedError)) {
     throw new Error('Expected SQL failure');
+  }
 
   const detail: unknown = failure.driverError;
 
   expect(detail).toHaveProperty('code', code);
 
-  if (constraint) expect(detail).toHaveProperty('constraint', constraint);
+  if (constraint) {
+    expect(detail).toHaveProperty('constraint', constraint);
+  }
 }
 
 test('migration creates named indexes and all ledger guards', async () => {
@@ -237,13 +249,14 @@ test('wallet uniqueness', async () => {
   );
 });
 
-for (const balance of ['-0.01', 'NaN', 'Infinity', '-Infinity'])
+for (const balance of ['-0.01', 'NaN', 'Infinity', '-Infinity']) {
   test('SQL rejects wallet balance ' + balance, async () => {
     await rejected(
       wallet({ balance }),
       balance.includes('Infinity') ? '22003' : '23514',
     );
   });
+}
 
 test('SQL rejects wallet version and unsupported currency', async () => {
   await rejected(wallet({ version: 0 }), '23514', 'ck_wallet_version');
@@ -266,13 +279,14 @@ test('transaction external identity and global idempotency key are unique', asyn
   );
 });
 
-for (const amount of ['-0.01', '0.00', 'NaN', 'Infinity', '-Infinity'])
+for (const amount of ['-0.01', '0.00', 'NaN', 'Infinity', '-Infinity']) {
   test('SQL rejects wager amount ' + amount, async () => {
     await rejected(
       wager(await wallet(), { amount }),
       amount.includes('Infinity') ? '22003' : '23514',
     );
   });
+}
 
 test('SQL checks statuses, reference requirement, snapshot, failure and wallet context', async () => {
   const w = await wallet();
@@ -494,7 +508,10 @@ test('round trips preserve large monetary values, dates, status and original bal
     },
   });
   const { openingTransaction, openingEntry } = opening;
-  if (!openingTransaction || !openingEntry) throw new Error('Missing opening');
+
+  if (!openingTransaction || !openingEntry) {
+    throw new Error('Missing opening');
+  }
 
   await unit.run(async (ctx) => {
     await ctx.wallets.insert(opening.wallet);
@@ -506,7 +523,10 @@ test('round trips preserve large monetary values, dates, status and original bal
   });
   await unit.run(async (ctx) => {
     const loaded = await ctx.wallets.findByIdForUpdate(key);
-    if (!loaded) throw new Error('Missing wallet');
+
+    if (!loaded) {
+      throw new Error('Missing wallet');
+    }
 
     const tx = WagerTransaction.create({
       id: id(),
@@ -531,7 +551,10 @@ test('round trips preserve large monetary values, dates, status and original bal
     await ctx.transactions.update(tx, {
       result: { balance: loaded.balance, version: loaded.version },
     });
-    if (result) await ctx.ledger.insert(result);
+
+    if (result) {
+      await ctx.ledger.insert(result);
+    }
 
     expect(
       (
@@ -565,7 +588,10 @@ test('round trips preserve large monetary values, dates, status and original bal
     ).toBe('9007199254740993.01');
 
     const first = entries[0];
-    if (!first) throw new Error('Missing ledger');
+
+    if (!first) {
+      throw new Error('Missing ledger');
+    }
 
     expect(
       await ctx.ledger.findByWallet(key, 50, {
@@ -592,8 +618,10 @@ test('all five repositories share rollback and outbox due query', async () => {
           payloadHash: 'hash',
         },
       });
-      if (!result.openingTransaction || !result.openingEntry)
+
+      if (!result.openingTransaction || !result.openingEntry) {
         throw new Error('Missing opening');
+      }
 
       await ctx.wallets.insert(result.wallet);
       await ctx.transactions.insert(result.openingTransaction, {
@@ -676,7 +704,10 @@ test('independent connection waits for same wallet while another wallet is acces
     const [{ pid }] = await second.manager.query<{ pid: number }[]>(
       'SELECT pg_backend_pid() AS pid',
     );
-    if (!pid) throw new Error('Missing backend');
+
+    if (!pid) {
+      throw new Error('Missing backend');
+    }
 
     waiting = new TypeOrmWalletRepository(second.manager).findByIdForUpdate(
       firstWallet.id,
@@ -689,6 +720,7 @@ test('independent connection waits for same wallet while another wallet is acces
         'SELECT cardinality(pg_blocking_pids($1)) > 0 AS blocked',
         [pid],
       );
+
       if (rows[0]?.blocked) {
         blocked = true;
         break;
@@ -705,9 +737,17 @@ test('independent connection waits for same wallet while another wallet is acces
 
     await second.commitTransaction();
   } finally {
-    if (first.isTransactionActive) await first.rollbackTransaction();
-    if (waiting) await waiting.catch(() => undefined);
-    if (second.isTransactionActive) await second.rollbackTransaction();
+    if (first.isTransactionActive) {
+      await first.rollbackTransaction();
+    }
+
+    if (waiting) {
+      await waiting.catch(() => undefined);
+    }
+
+    if (second.isTransactionActive) {
+      await second.rollbackTransaction();
+    }
 
     await first.release();
     await second.release();
@@ -732,8 +772,10 @@ test('concurrent reversal inserts are arbitrated by PostgreSQL uniqueness', asyn
   ).toHaveLength(1);
 
   const failure = results.find((result) => result.status === 'rejected');
-  if (!failure || failure.status !== 'rejected')
+
+  if (!failure || failure.status !== 'rejected') {
     throw new Error('Missing reversal conflict');
+  }
 
   expect(failure.reason).toHaveProperty(
     'driverError.constraint',
@@ -766,7 +808,7 @@ test('SQL reserves internal opening identity', async () => {
   );
 });
 
-for (const value of ['NaN', 'Infinity', '-Infinity', '-1.00'])
+for (const value of ['NaN', 'Infinity', '-Infinity', '-1.00']) {
   test('SQL protects ledger balances against ' + value, async () => {
     const w = await wallet();
     const tx = await wager(w);
@@ -779,6 +821,7 @@ for (const value of ['NaN', 'Infinity', '-Infinity', '-1.00'])
       value.includes('Infinity') ? '22003' : '23514',
     );
   });
+}
 
 test('outbox skip locked excludes records held by another connection', async () => {
   const key = id();
@@ -821,7 +864,9 @@ test('outbox skip locked excludes records held by another connection', async () 
       ).toBe(true);
     });
   } finally {
-    if (first.isTransactionActive) await first.rollbackTransaction();
+    if (first.isTransactionActive) {
+      await first.rollbackTransaction();
+    }
 
     await first.release();
   }
@@ -871,7 +916,10 @@ test('repository persists pending-reference retry metadata without domain transi
 
   await unit.run(async (ctx) => {
     const stored = await ctx.transactions.findById(row.id);
-    if (!stored) throw new Error('Missing transaction');
+
+    if (!stored) {
+      throw new Error('Missing transaction');
+    }
 
     stored.transaction.markPendingReference();
     await ctx.transactions.update(stored.transaction, {
