@@ -1,5 +1,6 @@
 import type { DataSourceOptions } from 'typeorm';
 import { environment } from '../config/environment.js';
+
 export function databaseOptions(): DataSourceOptions {
   return {
     type: 'postgres',

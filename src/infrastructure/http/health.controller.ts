@@ -11,6 +11,7 @@ import {
   GetQueueAttributesCommand,
 } from '@aws-sdk/client-sqs';
 import { environment } from '../config/environment.js';
+
 @Controller('health')
 export class HealthController {
   private connecting: Promise<DataSource> | undefined;
@@ -31,6 +32,7 @@ export class HealthController {
       throw new ServiceUnavailableException({ status: 'unavailable' });
     }
   }
+
   private async checkDatabase() {
     if (!this.database.isInitialized) {
       this.connecting ??= this.database.initialize().finally(() => {
@@ -40,6 +42,7 @@ export class HealthController {
     }
     await this.database.query('SELECT 1');
   }
+  
   private async checkSqs() {
     for (const QueueName of [environment().queueName, environment().dlqName]) {
       const { QueueUrl } = await this.sqs.send(

@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { databaseOptions } from './options.js';
+
 @Module({
   imports: [
     TypeOrmModule.forRootAsync({

@@ -1,4 +1,4 @@
-﻿# Decisões de arquitetura
+# Decisões de arquitetura
 
 ## Etapa 2: Bun e compilação
 
@@ -60,3 +60,34 @@ A persistência futura deverá usar NUMERIC(30,2) e moeda em coluna separada, pr
 
 A configuração isolada segue a API de clone do decimal.js.
 https://mikemcl.github.io/decimal.js/#clone
+
+## Etapa 5 — Entidades financeiras
+
+Wallet é o Aggregate Root do saldo e versionamento. Money mantém aritmética decimal exata. WalletLedgerEntry representa uma movimentação imutável e valida direção, moedas, montante positivo, saldos não negativos e equação financeira. WagerTransaction guarda identidade, contexto e transições do processamento.
+
+Wallet.open recebe id, playerId, initialBalance, at e contexto opcional opening com transactionId, ledgerEntryId e payloadHash fornecido pelo chamador. Retorna wallet, openingTransaction e openingEntry. Saldo positivo exige o contexto e produz OPENING interno já PROCESSED e crédito a partir de zero. Saldo zero retorna somente wallet. Versão inicial é sempre 1. A factory interna WagerTransaction.opening reserva provider/game internos e identificadores determinísticos de abertura. create rejeita OPENING externo.
+
+Wallet.debit e credit recebem Money e MovementContext com transactionId, ledgerEntryId e at. O lançamento é construído e validado antes da alteração do saldo, versão e updatedAt. Somente operações estritamente positivas alteram saldo e incrementam versão. Não há coleção de lançamentos no aggregate. Falhas locais preservam o estado financeiro. Timestamps são guardados como milissegundos e getters retornam novas Dates. Campos de identidade são protegidos por objetos congelados e estado privado ECMAScript.
+
+As factories rehydrate copiam estado persistido, incluindo versão, status e datas, sem gerar lançamentos nem reaplicar regras de transição ou criação. Datas precisam ser representáveis. A validação financeira de novos lançamentos ocorre em create. Um registro reidratado pode ser inspecionado com isBalanced para reconciliação.
+
+Transições permitidas de WagerTransaction
+- PENDING para PENDING_REFERENCE, PROCESSED, REJECTED ou FAILED.
+- PENDING_REFERENCE para PENDING_REFERENCE, PROCESSED, REJECTED ou FAILED.
+- PROCESSED, REJECTED e FAILED são terminais e todas as tentativas de mutação lançam InvalidTransactionStateError.
+Entrar em PENDING_REFERENCE exige identificador externo de referência. markProcessed exige identificador interno para reversões. Timestamp de processamento é registrado nessa transição. reject e fail armazenam failureCode.
+
+Política de valores adotada onde o desafio deixa interpretação aberta
+- BET, REFUND, ROLLBACK e OPENING exigem valor positivo.
+- WIN exige valor estritamente positivo e produz um lançamento CREDIT.
+- LOSS aceita valor não negativo e registra resultado sem alterar saldo ou versão e sem gerar lançamento no ledger.
+- A ausência de efeito implica ledgerDirectionFor lançar INVALID_LEDGER. affectsBalance indica potencial efeito da operação e valor, independentemente do status.
+- WIN sem referência é processado normalmente com crédito. Com referência explícita, exige BET PROCESSED do mesmo provider, player, wallet, moeda e rodada, com identidade externa correspondente. Referência ainda não encontrada leva a PENDING_REFERENCE sem alterar saldo, versão ou ledger. O prêmio pode diferir do valor da BET. gameId pode diferir, pois a seção 7 não o inclui no contexto exigido.
+
+BET debita. WIN e REFUND creditam. ROLLBACK de BET credita e de WIN/REFUND debita. REFUND exige BET processada. Reversões conferem provider, player, wallet, moeda, rodada, identidade externa e igualdade integral do valor. gameId não é exigido na igualdade de contexto porque a seção 7 não o inclui. Referência a si própria é inválida.
+
+WagerTransaction.applyTo aplica regras locais a uma wallet já carregada e retorna seu lançamento, ou undefined para resultado sem efeito ou referência pendente. Recebe referência resolvida pelo chamador. Uma falha de negócio lança FinancialRuleError e preserva saldo, ledger, versão e status anterior. A camada application deverá capturá-la e chamar reject(code). Referência ausente entra em PENDING_REFERENCE. Aplicação bem-sucedida marca PROCESSED. Hash é somente comparado por matchesPayload. O domínio não calcula hash nem consulta armazenamento.
+
+FailureCode contém INSUFFICIENT_FUNDS, INSUFFICIENT_REVERSAL_FUNDS, CURRENCY_MISMATCH, INVALID_AMOUNT, INVALID_REFERENCE, INVALID_REFERENCE_KIND, REFERENCE_CONTEXT_MISMATCH, REFERENCE_AMOUNT_MISMATCH, REFERENCE_NOT_FOUND, INVALID_KIND, EXTERNAL_OPENING_FORBIDDEN, INVALID_LEDGER, INVALID_TIMESTAMP e PERMANENT_INFRASTRUCTURE_FAILURE. Os códigos identificam falhas locais, expiração futura de referência ou falha permanente. InvalidTransactionStateError identifica uso incorreto de uma entidade terminal.
+
+A etapa de persistência deverá aplicar pessimistic locking por wallet no PostgreSQL. Wallet, transação, ledger, inbox e outbox participarão de uma única transação SQL. Também serão necessárias constraints de não-negatividade, imutabilidade e unicidade de wallet por player/moeda, lançamento por transação/wallet, idempotência e reversão por referência/tipo. Consultar reversões anteriores, resolver referências e evitar duplicatas entre instâncias continuam responsabilidades da aplicação e banco. Testes locais verificam invariantes em memória e reconstrução do saldo pelo ledger.

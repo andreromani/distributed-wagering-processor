@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { SQSClient } from '@aws-sdk/client-sqs';
 import { environment } from '../../config/environment.js';
+
 @Injectable()
 class SqsLifecycle implements OnModuleDestroy {
   constructor(@Inject(SQSClient) private readonly client: SQSClient) {}
@@ -13,6 +14,7 @@ class SqsLifecycle implements OnModuleDestroy {
     this.client.destroy();
   }
 }
+
 @Module({
   providers: [
     {
