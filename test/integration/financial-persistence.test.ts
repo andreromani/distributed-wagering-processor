@@ -11,35 +11,35 @@ import {
   WagerTransactionStatus as Status,
   FailureCode,
 } from '../../src/domain/financial.types.js';
-import {
-  TypeOrmFinancialTransaction,
-  TypeOrmWalletRepository,
-} from '../../src/infrastructure/database/repositories/financial.repositories.js';
-import {
-  WalletRowSchema,
-  WagerRowSchema,
-  LedgerRowSchema,
-  InboxRowSchema,
-} from '../../src/infrastructure/database/entities/financial.schemas.js';
-import type {
-  WagerRow,
-  WalletRow,
-  LedgerRow,
-} from '../../src/infrastructure/database/entities/financial.schemas.js';
+import { TypeOrmFinancialTransaction } from '../../src/infrastructure/database/repositories/typeorm-financial-transaction.js';
+import { TypeOrmWalletRepository } from '../../src/infrastructure/database/repositories/typeorm-wallet.repository.js';
+import { WalletRowSchema } from '../../src/infrastructure/database/entities/wallet.schema.js';
+import { WagerRowSchema } from '../../src/infrastructure/database/entities/wager-transaction.schema.js';
+import { LedgerRowSchema } from '../../src/infrastructure/database/entities/wallet-ledger.schema.js';
+import { InboxRowSchema } from '../../src/infrastructure/database/entities/inbox-message.schema.js';
+import type { WagerRow } from '../../src/infrastructure/database/entities/wager-transaction.schema.js';
+import type { WalletRow } from '../../src/infrastructure/database/entities/wallet.schema.js';
+import type { LedgerRow } from '../../src/infrastructure/database/entities/wallet-ledger.schema.js';
 
 const database = 'wager_test_' + crypto.randomUUID().replaceAll('-', '');
+
 const admin = new DataSource({
   ...databaseOptions(),
   extra: { statement_timeout: 60000, query_timeout: 65000 },
 });
+
 const source = new DataSource({
   ...databaseOptions(),
   database,
   migrations: [FinancialFoundation1797000000000],
 });
+
 const unit = new TypeOrmFinancialTransaction(source);
+
 const at = new Date('2026-01-01T00:00:00.000Z');
+
 const money = (amount: string) => Money.from({ amount, currency: 'BRL' });
+
 const id = () => crypto.randomUUID();
 
 async function cli(command: string) {
@@ -61,6 +61,7 @@ beforeAll(async () => {
   await admin.query('CREATE DATABASE "' + database + '"');
   await cli('migration:run');
   await source.initialize();
+
   expect(
     (
       await source.query<{ count: string }[]>(
@@ -68,7 +69,9 @@ beforeAll(async () => {
       )
     )[0]?.count,
   ).toBe('5');
+
   await cli('migration:revert');
+
   expect(
     (
       await source.query<{ name: string | null }[]>(
@@ -76,6 +79,7 @@ beforeAll(async () => {
       )
     )[0]?.name,
   ).toBeNull();
+
   await cli('migration:run');
 }, 180000);
 
@@ -84,6 +88,7 @@ afterAll(async () => {
   if (admin.isInitialized) {
     if (!/^wager_test_[a-f0-9]{32}$/.test(database))
       throw new Error('Unsafe test database name');
+
     await admin.query(
       'DROP DATABASE IF EXISTS "' + database + '" WITH (FORCE)',
     );
@@ -102,7 +107,9 @@ async function wallet(overrides: Partial<WalletRow> = {}): Promise<WalletRow> {
     updated_at: at,
     ...overrides,
   };
+
   await source.manager.insert(WalletRowSchema, row);
+
   return row;
 }
 
@@ -136,7 +143,9 @@ async function wager(
     next_attempt_at: null,
     ...overrides,
   };
+
   await source.manager.insert(WagerRowSchema, row);
+
   return row;
 }
 
@@ -169,7 +178,9 @@ async function expectFailure(
   } catch (error) {
     failure = error;
   }
+
   expect(failure).toBeInstanceOf(Error);
+
   if (failure instanceof Error) expect(failure.message).toContain(message);
 }
 
@@ -184,11 +195,16 @@ async function rejected(
   } catch (error) {
     failure = error;
   }
+
   expect(failure).toBeInstanceOf(QueryFailedError);
+
   if (!(failure instanceof QueryFailedError))
     throw new Error('Expected SQL failure');
+
   const detail: unknown = failure.driverError;
+
   expect(detail).toHaveProperty('code', code);
+
   if (constraint) expect(detail).toHaveProperty('constraint', constraint);
 }
 
@@ -196,13 +212,16 @@ test('migration creates named indexes and all ledger guards', async () => {
   const indexes = await source.query<{ indexname: string }[]>(
     "SELECT indexname FROM pg_indexes WHERE schemaname='public'",
   );
+
   expect(indexes.map((row) => row.indexname)).toContain(
     'uq_wager_processed_reversal',
   );
   expect(indexes.map((row) => row.indexname)).toContain('ix_outbox_pending');
+
   const triggers = await source.query<{ tgname: string }[]>(
     'SELECT tgname FROM pg_trigger WHERE NOT tgisinternal',
   );
+
   expect(triggers.map((row) => row.tgname)).toContain(
     'immutable_ledger_truncate',
   );
@@ -210,6 +229,7 @@ test('migration creates named indexes and all ledger guards', async () => {
 
 test('wallet uniqueness', async () => {
   const original = await wallet();
+
   await rejected(
     wallet({ ...original, id: id() }),
     '23505',
@@ -233,6 +253,7 @@ test('SQL rejects wallet version and unsupported currency', async () => {
 test('transaction external identity and global idempotency key are unique', async () => {
   const w = await wallet();
   const original = await wager(w);
+
   await rejected(
     wager(w, { external_transaction_id: original.external_transaction_id }),
     '23505',
@@ -255,6 +276,7 @@ for (const amount of ['-0.01', '0.00', 'NaN', 'Infinity', '-Infinity'])
 
 test('SQL checks statuses, reference requirement, snapshot, failure and wallet context', async () => {
   const w = await wallet();
+
   await rejected(wager(w, { status: 'INVALID' as Status }), '23514');
   await rejected(wager(w, { kind: Kind.Refund }), '23514');
   await rejected(wager(w, { result_balance: null }), '23514');
@@ -299,6 +321,7 @@ test('pending missing reference is stored for scheduled retry', async () => {
     next_attempt_at: at,
   });
   const loaded = await unit.run((ctx) => ctx.transactions.findById(tx.id));
+
   expect(loaded?.referenceAttempts).toBe(3);
   expect(loaded?.nextAttemptAt).toEqual(at);
 });
@@ -360,6 +383,7 @@ test('SQL rejects reference context, status, kind and partial reversal', async (
     result_balance: null,
     result_version: null,
   });
+
   await rejected(
     wager(w, {
       kind: Kind.Refund,
@@ -373,6 +397,7 @@ test('SQL rejects reference context, status, kind and partial reversal', async (
 test('ledger uniqueness, arithmetic and context are protected directly in SQL', async () => {
   const w = await wallet();
   const tx = await wager(w);
+
   await source.manager.insert(LedgerRowSchema, entry(w, tx));
   await rejected(
     source.manager.insert(LedgerRowSchema, entry(w, tx)),
@@ -410,6 +435,7 @@ test('ledger rejects UPDATE DELETE and TRUNCATE', async () => {
   const w = await wallet();
   const tx = await wager(w);
   const row = entry(w, tx);
+
   await source.manager.insert(LedgerRowSchema, row);
   await rejected(
     source.query('UPDATE wallet_ledger_entries SET amount=amount WHERE id=$1', [
@@ -438,9 +464,12 @@ test('inbox primary key and immutable original result', async () => {
     received_at: at,
     processed_at: null,
   };
+
   await source.manager.insert(InboxRowSchema, record);
   await rejected(source.manager.insert(InboxRowSchema, record), '23505');
+
   const tx = await wager(await wallet());
+
   await rejected(
     source.query(
       'UPDATE wager_transactions SET result_balance=$1 WHERE id=$2',
@@ -466,6 +495,7 @@ test('round trips preserve large monetary values, dates, status and original bal
   });
   const { openingTransaction, openingEntry } = opening;
   if (!openingTransaction || !openingEntry) throw new Error('Missing opening');
+
   await unit.run(async (ctx) => {
     await ctx.wallets.insert(opening.wallet);
     await ctx.transactions.insert(openingTransaction, {
@@ -477,6 +507,7 @@ test('round trips preserve large monetary values, dates, status and original bal
   await unit.run(async (ctx) => {
     const loaded = await ctx.wallets.findByIdForUpdate(key);
     if (!loaded) throw new Error('Missing wallet');
+
     const tx = WagerTransaction.create({
       id: id(),
       providerId: 'provider',
@@ -491,13 +522,17 @@ test('round trips preserve large monetary values, dates, status and original bal
       money: money('0.01'),
       createdAt: at,
     });
+
     await ctx.transactions.insert(tx);
+
     const result = tx.applyTo(loaded, { ledgerEntryId: id(), at });
+
     await ctx.wallets.update(loaded);
     await ctx.transactions.update(tx, {
       result: { balance: loaded.balance, version: loaded.version },
     });
     if (result) await ctx.ledger.insert(result);
+
     expect(
       (
         await ctx.transactions.findByProviderExternal(
@@ -511,7 +546,9 @@ test('round trips preserve large monetary values, dates, status and original bal
         await ctx.transactions.findByIdempotencyKey(tx.idempotencyKey)
       )?.result?.balance.toString(),
     ).toBe('9007199254740993.02');
+
     const original = await ctx.transactions.findById(openingTransaction.id);
+
     expect(original?.result?.balance.toString()).toBe('9007199254740993.01');
     expect(original?.result?.version).toBe(1);
     expect(original?.transaction.createdAt).toEqual(at);
@@ -519,13 +556,17 @@ test('round trips preserve large monetary values, dates, status and original bal
     expect((await ctx.wallets.findByPlayerCurrency(key, 'BRL'))?.version).toBe(
       2,
     );
+
     const entries = await ctx.ledger.findByWallet(key);
+
     expect(entries).toHaveLength(2);
     expect(
       entries.find((e) => e.id === openingEntry.id)?.money.toString(),
     ).toBe('9007199254740993.01');
+
     const first = entries[0];
     if (!first) throw new Error('Missing ledger');
+
     expect(
       await ctx.ledger.findByWallet(key, 50, {
         id: first.id,
@@ -537,6 +578,7 @@ test('round trips preserve large monetary values, dates, status and original bal
 
 test('all five repositories share rollback and outbox due query', async () => {
   const key = id();
+
   await expectFailure(
     unit.run(async (ctx) => {
       const result = Wallet.open({
@@ -552,6 +594,7 @@ test('all five repositories share rollback and outbox due query', async () => {
       });
       if (!result.openingTransaction || !result.openingEntry)
         throw new Error('Missing opening');
+
       await ctx.wallets.insert(result.wallet);
       await ctx.transactions.insert(result.openingTransaction, {
         balance: result.wallet.balance,
@@ -572,12 +615,14 @@ test('all five repositories share rollback and outbox due query', async () => {
         occurredAt: at,
         attempts: 0,
       });
+
       expect(
         (await ctx.outbox.lockDue(new Date(), 1000)).some(
           (row) => row.id === key,
         ),
       ).toBe(true);
       expect((await ctx.inbox.find(key, key))?.payloadHash).toBe('hash');
+
       throw new Error('rollback requested');
     }),
     'rollback requested',
@@ -592,6 +637,7 @@ test('all five repositories share rollback and outbox due query', async () => {
       await source.query('SELECT id FROM ' + table + ' WHERE id=$1', [key]),
     ).toHaveLength(0);
   }
+
   expect(
     await source.query(
       'SELECT message_id FROM inbox_messages WHERE message_id=$1',
@@ -626,13 +672,16 @@ test('independent connection waits for same wallet while another wallet is acces
     await new TypeOrmWalletRepository(second.manager).findByIdForUpdate(
       otherWallet.id,
     );
+
     const [{ pid }] = await second.manager.query<{ pid: number }[]>(
       'SELECT pg_backend_pid() AS pid',
     );
     if (!pid) throw new Error('Missing backend');
+
     waiting = new TypeOrmWalletRepository(second.manager).findByIdForUpdate(
       firstWallet.id,
     );
+
     let blocked = false;
     const deadline = Date.now() + 3000;
     while (Date.now() < deadline) {
@@ -644,16 +693,22 @@ test('independent connection waits for same wallet while another wallet is acces
         blocked = true;
         break;
       }
+
       await Bun.sleep(10);
     }
+
     expect(blocked).toBe(true);
+
     await first.commitTransaction();
+
     expect(await waiting).toBeDefined();
+
     await second.commitTransaction();
   } finally {
     if (first.isTransactionActive) await first.rollbackTransaction();
     if (waiting) await waiting.catch(() => undefined);
     if (second.isTransactionActive) await second.rollbackTransaction();
+
     await first.release();
     await second.release();
   }
@@ -671,12 +726,15 @@ test('concurrent reversal inserts are arbitrated by PostgreSQL uniqueness', asyn
       }),
     ),
   );
+
   expect(
     results.filter((result) => result.status === 'fulfilled'),
   ).toHaveLength(1);
+
   const failure = results.find((result) => result.status === 'rejected');
   if (!failure || failure.status !== 'rejected')
     throw new Error('Missing reversal conflict');
+
   expect(failure.reason).toHaveProperty(
     'driverError.constraint',
     'uq_wager_processed_reversal',
@@ -685,6 +743,7 @@ test('concurrent reversal inserts are arbitrated by PostgreSQL uniqueness', asyn
 
 test('processed transaction deletion cannot free the reversal uniqueness guard', async () => {
   const tx = await wager(await wallet());
+
   await rejected(
     source.query('DELETE FROM wager_transactions WHERE id=$1', [tx.id]),
     '23514',
@@ -694,6 +753,7 @@ test('processed transaction deletion cannot free the reversal uniqueness guard',
 
 test('SQL reserves internal opening identity', async () => {
   const w = await wallet();
+
   await rejected(
     wager(w, { provider_id: 'internal' }),
     '23514',
@@ -710,6 +770,7 @@ for (const value of ['NaN', 'Infinity', '-Infinity', '-1.00'])
   test('SQL protects ledger balances against ' + value, async () => {
     const w = await wallet();
     const tx = await wager(w);
+
     await rejected(
       source.manager.insert(
         LedgerRowSchema,
@@ -721,6 +782,7 @@ for (const value of ['NaN', 'Infinity', '-Infinity', '-1.00'])
 
 test('outbox skip locked excludes records held by another connection', async () => {
   const key = id();
+
   await unit.run((ctx) =>
     ctx.outbox.insert({
       id: key,
@@ -731,6 +793,7 @@ test('outbox skip locked excludes records held by another connection', async () 
       attempts: 0,
     }),
   );
+
   const first = source.createQueryRunner();
   try {
     await first.connect();
@@ -759,6 +822,7 @@ test('outbox skip locked excludes records held by another connection', async () 
     });
   } finally {
     if (first.isTransactionActive) await first.rollbackTransaction();
+
     await first.release();
   }
 });
@@ -771,16 +835,20 @@ test('reference lookup and processed reversal round trip preserve domain state',
     reference_transaction_id: ref.id,
     reference_external_transaction_id: ref.external_transaction_id,
   });
+
   await unit.run(async (ctx) => {
     const loaded = await ctx.transactions.findReference(
       ref.provider_id,
       ref.external_transaction_id,
     );
+
     expect(loaded?.transaction.id).toBe(ref.id);
+
     const reversed = await ctx.transactions.findProcessedReversal(
       ref.id,
       Kind.Rollback,
     );
+
     expect(reversed?.transaction.id).toBe(reversal.id);
     expect(reversed?.transaction.referenceTransactionId).toBe(ref.id);
     expect(reversed?.transaction.referenceExternalTransactionId).toBe(
@@ -800,15 +868,19 @@ test('repository persists pending-reference retry metadata without domain transi
     result_version: null,
     processed_at: null,
   });
+
   await unit.run(async (ctx) => {
     const stored = await ctx.transactions.findById(row.id);
     if (!stored) throw new Error('Missing transaction');
+
     stored.transaction.markPendingReference();
     await ctx.transactions.update(stored.transaction, {
       referenceAttempts: 2,
       nextAttemptAt: at,
     });
+
     const loaded = await ctx.transactions.findById(row.id);
+
     expect(loaded?.transaction.status).toBe(Status.PendingReference);
     expect(loaded?.referenceAttempts).toBe(2);
     expect(loaded?.nextAttemptAt).toEqual(at);

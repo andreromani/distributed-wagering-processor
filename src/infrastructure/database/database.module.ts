@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { databaseOptions } from './options.js';
 import { DataSource } from 'typeorm';
-import { TypeOrmFinancialTransaction } from './repositories/financial.repositories.js';
+import { TypeOrmFinancialTransaction } from './repositories/typeorm-financial-transaction.js';
 
 @Module({
   imports: [

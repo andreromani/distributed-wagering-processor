@@ -2,7 +2,8 @@ import { Money } from '../value-objects/money.js';
 import { WalletLedgerEntry } from './wallet-ledger-entry.js';
 import { WagerTransaction } from './wager-transaction.js';
 import { FailureCode, LedgerDirection } from '../financial.types.js';
-import { FinancialRuleError, timestamp } from '../errors/financial.errors.js';
+import { FinancialRuleError } from '../errors/financial-rule.error.js';
+import { timestamp } from '../errors/timestamp.js';
 
 export interface WalletState {
   id: string;
@@ -61,6 +62,7 @@ export class Wallet {
   } {
     if (props.initialBalance.isNegative())
       throw new FinancialRuleError(FailureCode.InvalidAmount);
+
     const wallet = new Wallet({
       id: props.id,
       playerId: props.playerId,
@@ -73,6 +75,7 @@ export class Wallet {
     if (props.initialBalance.isZero()) return { wallet };
     if (!props.opening)
       throw new FinancialRuleError(FailureCode.InvalidReference);
+
     const openingTransaction = WagerTransaction.opening({
       id: props.opening.transactionId,
       walletId: props.id,
@@ -92,6 +95,7 @@ export class Wallet {
       createdAt: props.at,
     });
     openingTransaction.markProcessed(undefined, props.at);
+
     return { wallet, openingTransaction, openingEntry };
   }
 
@@ -131,6 +135,7 @@ export class Wallet {
     this.assertMovement(money);
     if (this.balance.isLessThan(money))
       throw new FinancialRuleError(FailureCode.InsufficientFunds);
+
     return this.move(
       money,
       this.balance.subtract(money),
@@ -141,6 +146,7 @@ export class Wallet {
 
   credit(money: Money, context: MovementContext): WalletLedgerEntry {
     this.assertMovement(money);
+
     return this.move(
       money,
       this.balance.add(money),
@@ -166,12 +172,14 @@ export class Wallet {
       direction,
       createdAt: context.at,
     });
+
     this.#balance = balanceAfter;
     this.#version += 1;
     this.#updatedAt = at;
+
     return entry;
   }
-  
+
   private assertMovement(money: Money): void {
     if (money.currency !== this.currency)
       throw new FinancialRuleError(FailureCode.CurrencyMismatch);

@@ -15,18 +15,22 @@ import { environment } from '../config/environment.js';
 @Controller('health')
 export class HealthController {
   private connecting: Promise<DataSource> | undefined;
+
   constructor(
     @Inject(DataSource) private readonly database: DataSource,
     @Inject(SQSClient) private readonly sqs: SQSClient,
   ) {}
+
   @Get(['', 'live'])
   live(): { status: 'ok' } {
     return { status: 'ok' };
   }
+
   @Get('ready')
   async ready(): Promise<{ status: 'ok' }> {
     try {
       await Promise.all([this.checkDatabase(), this.checkSqs()]);
+
       return { status: 'ok' };
     } catch {
       throw new ServiceUnavailableException({ status: 'unavailable' });
@@ -40,9 +44,10 @@ export class HealthController {
       });
       await this.connecting;
     }
+
     await this.database.query('SELECT 1');
   }
-  
+
   private async checkSqs() {
     for (const QueueName of [environment().queueName, environment().dlqName]) {
       const { QueueUrl } = await this.sqs.send(

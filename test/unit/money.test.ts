@@ -4,19 +4,19 @@ import {
   Money,
   type MoneyProps,
 } from '../../src/domain/value-objects/money.js';
-import {
-  InvalidMoneyAmountError,
-  InvalidCurrencyError,
-  CurrencyMismatchError,
-  MoneyOutOfRangeError,
-} from '../../src/domain/errors/money.errors.js';
+import { InvalidMoneyAmountError } from '../../src/domain/errors/invalid-money-amount.error.js';
+import { InvalidCurrencyError } from '../../src/domain/errors/invalid-currency.error.js';
+import { CurrencyMismatchError } from '../../src/domain/errors/currency-mismatch.error.js';
+import { MoneyOutOfRangeError } from '../../src/domain/errors/money-out-of-range.error.js';
 
 const brl = (amount: string) => Money.from({ amount, currency: 'BRL' });
+
 const max = '9999999999999999999999999999.99';
 
 for (const currency of ['BRL', 'USD']) {
   test('creation and serialization in ' + currency, () => {
     const money = Money.from({ amount: '25.00', currency });
+
     expect(money.currency).toBe(currency);
     expect(money.toJSON()).toEqual({ amount: '25.00', currency });
     expect(JSON.stringify(money)).toBe(
@@ -28,6 +28,7 @@ for (const currency of ['BRL', 'USD']) {
 
 test('zero and signed zero normalization', () => {
   const zero = Money.zero('BRL');
+
   expect(zero.toString()).toBe('0.00');
   expect(zero.isZero()).toBe(true);
   expect(zero.isPositive()).toBe(false);
@@ -40,7 +41,9 @@ test('zero and signed zero normalization', () => {
 
 test('exact arithmetic and negative results', () => {
   expect(brl('0.10').add(brl('0.20')).toString()).toBe('0.30');
+
   const negative = brl('1.00').subtract(brl('2.50'));
+
   expect(negative.toString()).toBe('-1.50');
   expect(negative.isNegative()).toBe(true);
   expect(negative.isPositive()).toBe(false);
@@ -51,6 +54,7 @@ test('exact arithmetic and negative results', () => {
 
 test('comparisons', () => {
   const one = brl('1.00');
+
   expect(one.isPositive()).toBe(true);
   expect(one.isZero()).toBe(false);
   expect(one.isLessThan(brl('2.00'))).toBe(true);
@@ -75,6 +79,7 @@ test('operands and serialized copies remain independent', () => {
   }
   const props = left.toJSON();
   props.amount = '9.00';
+
   expect(left.toString()).toBe('2.00');
   expect(right.toString()).toBe('1.00');
   expect(Object.isFrozen(left)).toBe(true);
@@ -84,8 +89,11 @@ test('operands and serialized copies remain independent', () => {
 test('repeated arithmetic is exact', () => {
   let value = Money.zero('BRL');
   for (let i = 0; i < 1000; i++) value = value.add(brl('0.01'));
+
   expect(value.toString()).toBe('10.00');
+
   for (let i = 0; i < 1000; i++) value = value.subtract(brl('0.01'));
+
   expect(value.toString()).toBe('0.00');
 });
 
@@ -107,6 +115,7 @@ test('global Decimal configuration does not affect Money', () => {
   const precision = Decimal.precision;
   try {
     Decimal.set({ precision: 2 });
+
     expect(brl(max).subtract(brl('0.01')).toString()).toBe(
       '9999999999999999999999999999.98',
     );
@@ -146,17 +155,21 @@ for (const amount of [
     expect(() => brl(amount)).toThrow(InvalidMoneyAmountError);
   });
 }
+
 for (const amount of [1, NaN, Infinity, null, undefined, {}, true]) {
   test('rejects runtime non-string ' + JSON.stringify(amount), () => {
     const props = { amount, currency: 'BRL' } as unknown as MoneyProps;
+
     expect(() => Money.from(props)).toThrow(InvalidMoneyAmountError);
   });
 }
+
 for (const currency of ['', 'brl', ' BRL', 'ZZZ', 'EUR', 'US', 'USDD']) {
   test('rejects unsupported currency ' + currency, () => {
     expect(() => Money.zero(currency)).toThrow(InvalidCurrencyError);
   });
 }
+
 test('rehydration validates representation and permits signed values', () => {
   expect(
     Money.rehydrate({ amount: '-1.25', currency: 'USD' }).toJSON(),
@@ -168,6 +181,7 @@ test('rehydration validates representation and permits signed values', () => {
     InvalidCurrencyError,
   );
 });
+
 test('overflow is explicit for creation and both arithmetic directions', () => {
   expect(() => brl('10000000000000000000000000000.00')).toThrow(
     MoneyOutOfRangeError,
@@ -186,6 +200,7 @@ test('overflow is explicit for creation and both arithmetic directions', () => {
     }),
   ).toThrow(MoneyOutOfRangeError);
 });
+
 for (const method of ['add', 'subtract', 'isLessThan', 'equals'] as const) {
   test('currency mismatch in ' + method, () => {
     expect(() =>

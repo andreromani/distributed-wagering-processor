@@ -1,6 +1,7 @@
 import { Money } from '../value-objects/money.js';
 import { LedgerDirection, FailureCode } from '../financial.types.js';
-import { FinancialRuleError, timestamp } from '../errors/financial.errors.js';
+import { FinancialRuleError } from '../errors/financial-rule.error.js';
+import { timestamp } from '../errors/timestamp.js';
 
 export interface LedgerEntryState {
   id: string;
@@ -16,8 +17,10 @@ export interface LedgerEntryState {
 export class WalletLedgerEntry {
   readonly #state: Readonly<Omit<LedgerEntryState, 'createdAt'>>;
   readonly #createdAt: number;
+
   private constructor(state: LedgerEntryState) {
     const { createdAt, ...fields } = state;
+
     this.#state = Object.freeze(fields);
     this.#createdAt = timestamp(createdAt);
     Object.freeze(this);
@@ -37,9 +40,11 @@ export class WalletLedgerEntry {
       state.balanceAfter.isNegative()
     )
       throw new FinancialRuleError(FailureCode.InvalidAmount);
+
     const entry = new WalletLedgerEntry(state);
     if (!entry.isBalanced())
       throw new FinancialRuleError(FailureCode.InvalidLedger);
+
     return entry;
   }
 
@@ -58,7 +63,7 @@ export class WalletLedgerEntry {
   get transactionId() {
     return this.#state.transactionId;
   }
-  
+
   get direction() {
     return this.#state.direction;
   }
@@ -78,12 +83,13 @@ export class WalletLedgerEntry {
   get createdAt() {
     return new Date(this.#createdAt);
   }
-  
+
   isBalanced(): boolean {
     const expected =
       this.direction === LedgerDirection.Debit
         ? this.balanceBefore.subtract(this.money)
         : this.balanceBefore.add(this.money);
+
     return expected.equals(this.balanceAfter);
   }
 }

@@ -15,14 +15,14 @@ import {
   WagerTransactionStatus as Status,
   FailureCode,
 } from '../../src/domain/financial.types.js';
-import {
-  FinancialRuleError,
-  InvalidTransactionStateError,
-} from '../../src/domain/errors/financial.errors.js';
+import { FinancialRuleError } from '../../src/domain/errors/financial-rule.error.js';
+import { InvalidTransactionStateError } from '../../src/domain/errors/invalid-transaction-state.error.js';
 
 const money = (amount: string, currency = 'BRL') =>
   Money.rehydrate({ amount, currency });
+
 const at = () => new Date('2026-01-01T00:00:00Z');
+
 const context = () => ({
   transactionId: 'tx',
   ledgerEntryId: 'entry',
@@ -62,6 +62,7 @@ const props = (kind = Kind.Bet): CreateWagerTransactionProps => ({
 const processed = (kind = Kind.Bet) => {
   const tx = WagerTransaction.create({ ...props(kind), id: 'reference' });
   tx.markProcessed(kind === Kind.Refund ? 'original-bet' : undefined, at());
+
   return tx;
 };
 
@@ -82,16 +83,20 @@ function expectCode(action: () => unknown, code: FailureCode) {
     throw new Error('Expected business failure');
   } catch (error) {
     expect(error).toBeInstanceOf(FinancialRuleError);
+
     if (error instanceof FinancialRuleError) expect(error.code).toBe(code);
   }
 }
 
 test('zero opening and positive opening keep version one and return matching accounting records', () => {
   const zero = open('0.00');
+
   expect(zero.wallet.version).toBe(1);
   expect(zero.openingEntry).toBeUndefined();
   expect(zero.openingTransaction).toBeUndefined();
+
   const result = open();
+
   expect(result.wallet.version).toBe(1);
   expect(result.openingTransaction?.kind).toBe(Kind.Opening);
   expect(result.openingTransaction?.status).toBe(Status.Processed);
@@ -120,12 +125,16 @@ test('opening rejects negative balance and missing opening accounting context', 
 
 test('debit and credit produce balanced entries and increment version', () => {
   const { wallet } = open();
+
   const debit = wallet.debit(money('10.00'), context());
+
   expect(debit.direction).toBe(Direction.Debit);
   expect(debit.balanceBefore.toString()).toBe('100.00');
   expect(debit.balanceAfter.toString()).toBe('90.00');
   expect(wallet.version).toBe(2);
+
   const credit = wallet.credit(money('5.00'), context());
+
   expect(credit.isBalanced()).toBe(true);
   expect(wallet.balance.toString()).toBe('95.00');
   expect(wallet.version).toBe(3);
@@ -133,7 +142,9 @@ test('debit and credit produce balanced entries and increment version', () => {
 
 test('debit can consume exactly the balance', () => {
   const { wallet } = open();
+
   wallet.debit(money('100.00'), context());
+
   expect(wallet.balance.isZero()).toBe(true);
 });
 
@@ -141,24 +152,31 @@ for (const method of ['debit', 'credit'] as const) {
   for (const amount of ['0.00', '-0.01'])
     test(method + ' rejects ' + amount + ' without changing wallet', () => {
       const { wallet } = open();
+
       expectCode(
         () => wallet[method](money(amount), context()),
         FailureCode.InvalidAmount,
       );
+
       expect(wallet.balance.toString()).toBe('100.00');
       expect(wallet.version).toBe(1);
       expect(wallet.updatedAt).toEqual(at());
     });
+
   test(method + ' rejects currency mismatch', () => {
     const { wallet } = open();
+
     expectCode(
       () => wallet[method](money('1.00', 'USD'), context()),
       FailureCode.CurrencyMismatch,
     );
+
     expect(wallet.version).toBe(1);
   });
+
   test(method + ' invalid timestamp leaves all state intact', () => {
     const { wallet } = open();
+
     expectCode(
       () =>
         wallet[method](money('1.00'), {
@@ -167,6 +185,7 @@ for (const method of ['debit', 'credit'] as const) {
         }),
       FailureCode.InvalidTimestamp,
     );
+
     expect(wallet.balance.toString()).toBe('100.00');
     expect(wallet.version).toBe(1);
     expect(wallet.updatedAt).toEqual(at());
@@ -175,10 +194,12 @@ for (const method of ['debit', 'credit'] as const) {
 
 test('insufficient funds leaves wallet intact', () => {
   const { wallet } = open();
+
   expectCode(
     () => wallet.debit(money('100.01'), context()),
     FailureCode.InsufficientFunds,
   );
+
   expect(wallet.version).toBe(1);
   expect(wallet.balance.toString()).toBe('100.00');
 });
@@ -197,6 +218,7 @@ test('wallet rehydration restores state and protects dates and identity', () => 
   date.setFullYear(2000);
   wallet.createdAt.setFullYear(2001);
   wallet.updatedAt.setFullYear(2002);
+
   expect(wallet.createdAt).toEqual(at());
   expect(wallet.updatedAt).toEqual(at());
   expect(wallet.version).toBe(7);
@@ -211,6 +233,7 @@ for (const direction of Object.values(Direction))
       direction,
       balanceAfter: money(direction === Direction.Debit ? '90.00' : '110.00'),
     });
+
     expect(entry.isBalanced()).toBe(true);
   });
 
@@ -244,6 +267,7 @@ for (const field of ['money', 'balanceBefore', 'balanceAfter'] as const) {
       FailureCode.CurrencyMismatch,
     );
   });
+
   test('ledger rejects negative ' + field, () => {
     expectCode(
       () => WalletLedgerEntry.create({ ...ledger(), [field]: money('-1.00') }),
@@ -265,9 +289,12 @@ test('ledger is immutable and rehydrate does not replay create validation', () =
     ...state,
     balanceAfter: money('80.00'),
   });
+
   expect(entry.isBalanced()).toBe(false);
+
   state.createdAt.setFullYear(2000);
   entry.createdAt.setFullYear(2001);
+
   expect(entry.createdAt).toEqual(at());
   expect(Object.isFrozen(entry)).toBe(true);
   expect(Reflect.set(entry, 'money', money('1.00'))).toBe(false);
@@ -276,6 +303,7 @@ test('ledger is immutable and rehydrate does not replay create validation', () =
 for (const kind of [Kind.Bet, Kind.Win, Kind.Loss, Kind.Refund, Kind.Rollback])
   test('creates pending ' + kind, () => {
     const tx = WagerTransaction.create(props(kind));
+
     expect(tx.status).toBe(Status.Pending);
     expect(tx.isTerminal()).toBe(false);
     expect(tx.matchesPayload('hash')).toBe(true);
@@ -327,6 +355,7 @@ for (const kind of [Kind.Loss])
       ...props(kind),
       money: money('0.00'),
     });
+
     expect(tx.applyTo(wallet, context())).toBeUndefined();
     expect(wallet.version).toBe(1);
     expect(tx.status).toBe(Status.Processed);
@@ -353,8 +382,10 @@ for (const from of [Status.Pending, Status.PendingReference]) {
       if (to === Status.Rejected) tx.reject(FailureCode.InvalidReference);
       if (to === Status.Failed)
         tx.fail(FailureCode.PermanentInfrastructureFailure);
+
       expect(tx.status).toBe(to);
       expect(tx.isTerminal()).toBe(true);
+
       if (to !== Status.Processed) expect(tx.failureCode).toBeDefined();
     });
 }
@@ -375,9 +406,12 @@ for (const status of [Status.Processed, Status.Rejected, Status.Failed])
 test('pending reference can be retried and processed later', () => {
   const tx = WagerTransaction.create(props(Kind.Refund));
   const { wallet } = open();
+
   expect(tx.applyTo(wallet, context())).toBeUndefined();
   expect(tx.status).toBe(Status.PendingReference);
+
   tx.markPendingReference();
+
   expect(tx.applyTo(wallet, context(), processed())?.direction).toBe(
     Direction.Credit,
   );
@@ -397,6 +431,7 @@ test('transaction dates and rehydrated state are protected', () => {
   date.setFullYear(2000);
   tx.createdAt.setFullYear(2001);
   tx.processedAt?.setFullYear(2002);
+
   expect(tx.createdAt).toEqual(at());
   expect(tx.processedAt).toEqual(at());
   expect(tx.failureCode).toBe(FailureCode.InvalidAmount);
@@ -417,8 +452,11 @@ for (const [kind, referenceKind, direction, balance] of [
     const tx = WagerTransaction.create(props(kind));
     const reference =
       referenceKind === undefined ? undefined : processed(referenceKind);
+
     expect(tx.ledgerDirectionFor(reference)).toBe(direction);
+
     const entry = tx.applyTo(wallet, context(), reference);
+
     expect(entry?.direction).toBe(direction);
     expect(wallet.balance.toString()).toBe(balance);
     expect(tx.status).toBe(Status.Processed);
@@ -427,9 +465,11 @@ for (const [kind, referenceKind, direction, balance] of [
 test('positive LOSS records outcome without financial effect', () => {
   const { wallet } = open();
   const tx = WagerTransaction.create(props(Kind.Loss));
+
   expect(tx.applyTo(wallet, context())).toBeUndefined();
   expect(wallet.version).toBe(1);
   expect(wallet.balance.toString()).toBe('100.00');
+
   expectCode(() => tx.ledgerDirectionFor(), FailureCode.InvalidLedger);
 });
 
@@ -443,10 +483,12 @@ for (const field of ['providerId', 'playerId', 'walletId', 'roundId'] as const)
       status: Status.Processed,
     });
     const { wallet } = open();
+
     expectCode(
       () => tx.applyTo(wallet, context(), reference),
       FailureCode.ReferenceContextMismatch,
     );
+
     expect(wallet.version).toBe(1);
   });
 
@@ -457,6 +499,7 @@ test('reference rejects currency mismatch', () => {
     money: money('10.00', 'USD'),
     status: Status.Processed,
   });
+
   expectCode(
     () =>
       WagerTransaction.create(props(Kind.Refund)).validateReference(reference),
@@ -470,10 +513,12 @@ test('partial reversal fails without changing financial state', () => {
     ...props(Kind.Refund),
     money: money('5.00'),
   });
+
   expectCode(
     () => tx.applyTo(wallet, context(), processed()),
     FailureCode.ReferenceAmountMismatch,
   );
+
   expect(wallet.version).toBe(1);
   expect(tx.status).toBe(Status.Pending);
 });
@@ -485,6 +530,7 @@ for (const kind of [Kind.Loss, Kind.Rollback, Kind.Opening])
       id: 'ref',
       status: Status.Processed,
     });
+
     expectCode(
       () =>
         WagerTransaction.create(props(Kind.Rollback)).validateReference(
@@ -516,6 +562,7 @@ for (const status of [
       id: 'ref',
       status,
     });
+
     expectCode(
       () =>
         WagerTransaction.create(props(Kind.Refund)).validateReference(
@@ -530,6 +577,7 @@ test('reference must match external identifier', () => {
     ...props(Kind.Refund),
     referenceExternalTransactionId: 'different',
   });
+
   expectCode(
     () => tx.validateReference(processed()),
     FailureCode.InvalidReference,
@@ -540,6 +588,7 @@ test('insufficient balance distinguishes bet from reversal', () => {
   for (const kind of [Kind.Bet, Kind.Rollback]) {
     const { wallet } = open('1.00');
     const tx = WagerTransaction.create(props(kind));
+
     expectCode(
       () =>
         tx.applyTo(
@@ -556,6 +605,7 @@ test('insufficient balance distinguishes bet from reversal', () => {
         ? FailureCode.InsufficientFunds
         : FailureCode.InsufficientReversalFunds,
     );
+
     expect(wallet.balance.toString()).toBe('1.00');
     expect(wallet.version).toBe(1);
   }
@@ -565,6 +615,7 @@ test('rejected transaction cannot move balance', () => {
   const { wallet } = open();
   const tx = WagerTransaction.create(props());
   tx.reject(FailureCode.InvalidAmount);
+
   expect(() => tx.applyTo(wallet, context())).toThrow(
     InvalidTransactionStateError,
   );
@@ -575,33 +626,42 @@ test('ledger reconstructs final balance including opening, bet, win, refund and 
   const { wallet, openingEntry } = open();
   const entries: WalletLedgerEntry[] = [];
   if (openingEntry) entries.push(openingEntry);
+
   const bet = WagerTransaction.create(props());
+
   const betEntry = bet.applyTo(wallet, context());
   if (betEntry) entries.push(betEntry);
+
   const refund = WagerTransaction.create({
     ...props(Kind.Refund),
     id: 'refund',
     externalTransactionId: 'refund',
   });
+
   const refundEntry = refund.applyTo(wallet, context(), bet);
   if (refundEntry) entries.push(refundEntry);
+
   const rollback = WagerTransaction.create({
     ...props(Kind.Rollback),
     referenceExternalTransactionId: 'refund',
   });
+
   const rollbackEntry = rollback.applyTo(wallet, context(), refund);
   if (rollbackEntry) entries.push(rollbackEntry);
+
   let calculated = Money.zero('BRL');
   for (const entry of entries)
     calculated =
       entry.direction === Direction.Credit
         ? calculated.add(entry.money)
         : calculated.subtract(entry.money);
+
   expect(wallet.balance.equals(calculated)).toBe(true);
 });
 
 test('wallet credit overflow fails before changing any state', () => {
   const { wallet } = open('9999999999999999999999999999.99');
+
   expect(() => wallet.credit(money('0.01'), context())).toThrow();
   expect(wallet.version).toBe(1);
   expect(wallet.balance.toString()).toBe('9999999999999999999999999999.99');
@@ -617,8 +677,10 @@ test('internal opening is explicit and requires positive money', () => {
     payloadHash: 'hash',
     createdAt: at(),
   });
+
   expect(tx.status).toBe(Status.Pending);
   expect(tx.ledgerDirectionFor()).toBe(Direction.Credit);
+
   for (const amount of ['0.00', '-1.00'])
     expectCode(
       () =>
@@ -636,6 +698,7 @@ test('internal opening is explicit and requires positive money', () => {
 
 test('markProcessed rejects missing reversal reference and invalid dates without mutation', () => {
   const tx = WagerTransaction.create(props(Kind.Refund));
+
   expectCode(
     () => tx.markProcessed(undefined, at()),
     FailureCode.InvalidReference,
@@ -644,10 +707,12 @@ test('markProcessed rejects missing reversal reference and invalid dates without
     () => tx.markProcessed('ref', new Date('invalid')),
     FailureCode.InvalidTimestamp,
   );
+
   expect(tx.status).toBe(Status.Pending);
   expect(tx.referenceTransactionId).toBeUndefined();
   expect(tx.processedAt).toBeUndefined();
 });
+
 test('nonreferenced transaction cannot enter pending reference', () => {
   expect(() => WagerTransaction.create(props()).markPendingReference()).toThrow(
     InvalidTransactionStateError,
@@ -660,6 +725,7 @@ test('self reference is ineligible', () => {
     ...props(),
     status: Status.Processed,
   });
+
   expectCode(
     () => tx.validateReference(reference),
     FailureCode.InvalidReference,
@@ -672,19 +738,24 @@ test('optional WIN reference validates BET and can await a missing reference', (
     referenceExternalTransactionId: 'external',
   });
   const { wallet } = open();
+
   expect(tx.applyTo(wallet, context())).toBeUndefined();
   expect(tx.status).toBe(Status.PendingReference);
+
   tx.applyTo(wallet, context(), processed());
+
   expect(wallet.balance.toString()).toBe('110.00');
 });
 
 test('application to a different wallet rejects without state changes', () => {
   const { wallet } = open();
   const tx = WagerTransaction.create({ ...props(), walletId: 'other' });
+
   expectCode(
     () => tx.applyTo(wallet, context()),
     FailureCode.ReferenceContextMismatch,
   );
+
   expect(wallet.version).toBe(1);
   expect(tx.status).toBe(Status.Pending);
 });
@@ -695,7 +766,9 @@ test('application rejects different wallet currency without changes', () => {
     ...props(),
     money: money('1.00', 'USD'),
   });
+
   expectCode(() => tx.applyTo(wallet, context()), FailureCode.CurrencyMismatch);
+
   expect(wallet.version).toBe(1);
 });
 
@@ -705,16 +778,19 @@ test('processed timestamps are copied from transition input', () => {
   tx.markProcessed(undefined, date);
   date.setFullYear(2000);
   tx.processedAt?.setFullYear(2001);
+
   expect(tx.processedAt).toEqual(at());
 });
 
 test('a supplied reference must have been declared by the transaction', () => {
   const tx = WagerTransaction.create(props(Kind.Win));
   const { wallet } = open();
+
   expectCode(
     () => tx.applyTo(wallet, context(), processed()),
     FailureCode.InvalidReference,
   );
+
   expect(wallet.version).toBe(1);
   expect(tx.status).toBe(Status.Pending);
 });
@@ -739,10 +815,12 @@ for (const kind of [Kind.Win, Kind.Refund, Kind.Rollback]) {
         [field]: field === 'money' ? money('10.00', 'USD') : 'different',
       });
       const { wallet } = open();
+
       expectCode(
         () => tx.applyTo(wallet, context(), reference),
         FailureCode.ReferenceContextMismatch,
       );
+
       expect(wallet.balance.toString()).toBe('100.00');
       expect(wallet.version).toBe(1);
       expect(wallet.updatedAt).toEqual(at());
@@ -758,7 +836,9 @@ test('WIN accepts a different prize and gameId for a BET in the same context', (
     referenceExternalTransactionId: 'external',
   });
   const { wallet } = open();
+
   const entry = tx.applyTo(wallet, context(), processed());
+
   expect(entry?.direction).toBe(Direction.Credit);
   expect(entry?.money.toString()).toBe('25.00');
   expect(tx.referenceTransactionId).toBe('reference');
@@ -782,6 +862,7 @@ for (const kind of [Kind.Win, Kind.Refund, Kind.Rollback]) {
         id: 'ref',
         status,
       });
+
       expectCode(
         () => tx.validateReference(reference),
         FailureCode.InvalidReference,
@@ -796,6 +877,7 @@ test('WIN with absent declared reference preserves financial state', () => {
     referenceExternalTransactionId: 'missing',
   });
   const { wallet } = open();
+
   expect(tx.applyTo(wallet, context())).toBeUndefined();
   expect(tx.status).toBe(Status.PendingReference);
   expect(wallet.balance.toString()).toBe('100.00');
@@ -808,6 +890,7 @@ test('WIN reference must be BET', () => {
     ...props(Kind.Win),
     referenceExternalTransactionId: 'external',
   });
+
   expectCode(
     () => tx.validateReference(processed(Kind.Win)),
     FailureCode.InvalidReferenceKind,
@@ -818,6 +901,7 @@ for (const status of [Status.Processed, Status.Rejected, Status.Failed]) {
   test('terminal ' + status + ' preserves wallet on applyTo', () => {
     const tx = WagerTransaction.rehydrate({ ...props(), status });
     const { wallet } = open();
+
     expect(() => tx.applyTo(wallet, context())).toThrow(
       InvalidTransactionStateError,
     );
@@ -829,6 +913,7 @@ for (const status of [Status.Processed, Status.Rejected, Status.Failed]) {
 
 test('positive opening returns exactly one processed opening and one credit at version one', () => {
   const result = open();
+
   expect(Object.keys(result).sort()).toEqual([
     'openingEntry',
     'openingTransaction',

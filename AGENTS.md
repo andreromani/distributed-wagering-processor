@@ -72,3 +72,14 @@
 - Em todos os cenários financeiros, confira saldo materializado igual ao reconstruído pelo ledger.
 - Execute as validações relevantes à alteração (tipagem, lint, build e testes conforme aplicável). Informe comandos, resultados, erros e limitações; nunca declare como validado o que não executou.
 - Não instale dependências nem altere configurações fora do escopo autorizado da etapa.
+
+## Organização e legibilidade
+
+- Use um arquivo por classe principal, interface principal de repositório, porta ou contrato independente, EntitySchema principal, mapper principal, caso de uso e evento de integração concreto.
+- Tipos auxiliares pequenos podem permanecer junto do contrato ou classe a que pertencem. Enums, aliases e pequenas interfaces auxiliares não exigem arquivos individuais.
+- Evite arquivos genéricos que agrupem responsabilidades independentes, fragmentação excessiva e abstrações desnecessárias.
+- Use uma linha em branco entre métodos, construtores, factories e assinaturas de métodos das interfaces principais.
+- Separe blocos lógicos dentro de métodos quando necessário, mantendo juntas instruções da mesma responsabilidade. Distinga validação, processamento, persistência e retorno quando forem etapas distintas.
+- Separe testes, hooks e blocos de teste com linhas em branco. Organize preparação, execução e verificação com espaçamento, preservando grupos de assertions relacionadas.
+- Preserve as configurações existentes do Prettier e do lint. Evite linhas em branco excessivas e comentários usados apenas como separadores.
+- Aplique essas convenções também a novos controllers, DTOs, consumers, publishers, workers e testes.

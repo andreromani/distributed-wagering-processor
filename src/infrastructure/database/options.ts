@@ -1,8 +1,11 @@
 import type { DataSourceOptions } from 'typeorm';
-import { financialEntities } from './entities/financial.schemas.js';
+import { financialEntities } from './entities/financial-entities.js';
 import { environment } from '../config/environment.js';
 
-export function databaseOptions(): Extract<DataSourceOptions, { type: 'postgres' }> {
+export function databaseOptions(): Extract<
+  DataSourceOptions,
+  { type: 'postgres' }
+> {
   return {
     type: 'postgres',
     ...environment().database,

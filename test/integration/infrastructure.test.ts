@@ -17,13 +17,17 @@ test('real infrastructure, DI, health, queue attributes and shutdown', async () 
   const sqs = app.get(SQSClient);
   try {
     await app.listen(0, '127.0.0.1');
+
     const url = await app.getUrl();
     for (const path of ['/health', '/health/live', '/health/ready']) {
       const response = await fetch(url + path);
+
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({ status: 'ok' });
     }
+
     expect(await database.query('SELECT 1 AS value')).toEqual([{ value: 1 }]);
+
     const config = environment();
     const main = await sqs.send(
       new GetQueueUrlCommand({ QueueName: config.queueName }),
@@ -43,6 +47,7 @@ test('real infrastructure, DI, health, queue attributes and shutdown', async () 
         AttributeNames: ['All'],
       }),
     );
+
     expect(attrs.Attributes?.FifoQueue).toBe('true');
     expect(dead.Attributes?.FifoQueue).toBe('true');
     expect(JSON.parse(attrs.Attributes?.RedrivePolicy ?? '{}')).toEqual({
@@ -56,17 +61,21 @@ test('real infrastructure, DI, health, queue attributes and shutdown', async () 
   } finally {
     await app.close();
   }
+
   expect(database.isInitialized).toBe(false);
 }, 20000);
 
 test('unavailable dependency gives 503 while liveness stays 200', async () => {
   const previous = process.env.SQS_ENDPOINT;
   process.env.SQS_ENDPOINT = 'http://127.0.0.1:1';
+
   const app = await NestFactory.create(AppModule, { logger: false });
   process.env.SQS_ENDPOINT = previous;
   try {
     await app.listen(0, '127.0.0.1');
+
     const url = await app.getUrl();
+
     expect((await fetch(url + '/health/live')).status).toBe(200);
     expect((await fetch(url + '/health/ready')).status).toBe(503);
   } finally {

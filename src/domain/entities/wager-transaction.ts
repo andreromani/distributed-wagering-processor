@@ -5,11 +5,9 @@ import {
   WagerTransactionKind as Kind,
   WagerTransactionStatus as Status,
 } from '../financial.types.js';
-import {
-  FinancialRuleError,
-  InvalidTransactionStateError,
-  timestamp,
-} from '../errors/financial.errors.js';
+import { FinancialRuleError } from '../errors/financial-rule.error.js';
+import { InvalidTransactionStateError } from '../errors/invalid-transaction-state.error.js';
+import { timestamp } from '../errors/timestamp.js';
 import type { Wallet } from './wallet.js';
 import type { WalletLedgerEntry } from './wallet-ledger-entry.js';
 
@@ -62,6 +60,7 @@ export class WagerTransaction {
       createdAt,
       ...props
     } = state;
+
     this.#props = Object.freeze(props);
     this.#createdAt = timestamp(createdAt);
     this.#status = status;
@@ -75,6 +74,7 @@ export class WagerTransaction {
   static create(props: CreateWagerTransactionProps): WagerTransaction {
     if (props.kind === Kind.Opening)
       throw new FinancialRuleError(FailureCode.ExternalOpeningForbidden);
+
     return WagerTransaction.newPending(props);
   }
 
@@ -106,6 +106,7 @@ export class WagerTransaction {
       !props.referenceExternalTransactionId?.trim()
     )
       throw new FinancialRuleError(FailureCode.InvalidReference);
+
     return new WagerTransaction({ ...props, status: Status.Pending });
   }
 
@@ -187,7 +188,9 @@ export class WagerTransaction {
     this.assertMutable();
     if (this.requiresReference() && !referenceTransactionId)
       throw new FinancialRuleError(FailureCode.InvalidReference);
+
     const processedAt = timestamp(at);
+
     this.#referenceTransactionId = referenceTransactionId;
     this.#processedAt = processedAt;
     this.#status = Status.Processed;
@@ -197,17 +200,20 @@ export class WagerTransaction {
     this.assertMutable();
     if (!this.referenceExternalTransactionId)
       throw new InvalidTransactionStateError();
+
     this.#status = Status.PendingReference;
   }
 
   reject(code: FailureCode): void {
     this.assertMutable();
+
     this.#failureCode = code;
     this.#status = Status.Rejected;
   }
 
   fail(code: FailureCode): void {
     this.assertMutable();
+
     this.#failureCode = code;
     this.#status = Status.Failed;
   }
@@ -245,6 +251,7 @@ export class WagerTransaction {
       reference.roundId !== this.roundId
     )
       throw new FinancialRuleError(FailureCode.ReferenceContextMismatch);
+
     const allowed =
       this.kind === Kind.Rollback
         ? [Kind.Bet, Kind.Win, Kind.Refund]
@@ -261,17 +268,20 @@ export class WagerTransaction {
     if (this.requiresReference()) {
       if (!reference)
         throw new FinancialRuleError(FailureCode.ReferenceNotFound);
+
       this.validateReference(reference);
       if (this.kind === Kind.Rollback)
         return reference.kind === Kind.Bet
           ? LedgerDirection.Credit
           : LedgerDirection.Debit;
     }
+
     return this.kind === Kind.Bet
       ? LedgerDirection.Debit
       : LedgerDirection.Credit;
   }
   /** Applies only local financial rules. Callers resolve references and prior reversals. */
+
   applyTo(
     wallet: Wallet,
     context: { ledgerEntryId: string; at: Date },
@@ -288,14 +298,18 @@ export class WagerTransaction {
     if (this.referenceExternalTransactionId) {
       if (!reference) {
         this.markPendingReference();
+
         return undefined;
       }
+
       this.validateReference(reference);
     }
     if (!this.affectsBalance()) {
       this.markProcessed(reference?.id, context.at);
+
       return undefined;
     }
+
     const direction = this.ledgerDirectionFor(reference);
     if (
       direction === LedgerDirection.Debit &&
@@ -306,12 +320,15 @@ export class WagerTransaction {
           ? FailureCode.InsufficientReversalFunds
           : FailureCode.InsufficientFunds,
       );
+
     const movement = { ...context, transactionId: this.id };
+
     const entry =
       direction === LedgerDirection.Debit
         ? wallet.debit(this.money, movement)
         : wallet.credit(this.money, movement);
     this.markProcessed(reference?.id, context.at);
+
     return entry;
   }
 
