@@ -74,6 +74,7 @@ beforeAll(async () => {
   ).toBe('5');
 
   await cli('migration:revert');
+  await cli('migration:revert');
 
   expect(
     (

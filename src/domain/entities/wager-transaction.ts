@@ -218,10 +218,17 @@ export class WagerTransaction {
   }
 
   validateReference(reference: WagerTransaction): void {
+    if (reference.status !== Status.Processed) {
+      throw new FinancialRuleError(FailureCode.InvalidReference);
+    }
+
+    this.validateReferenceStructure(reference);
+  }
+
+  private validateReferenceStructure(reference: WagerTransaction): void {
     if (
       reference.id === this.id ||
-      reference.externalTransactionId !== this.referenceExternalTransactionId ||
-      reference.status !== Status.Processed
+      reference.externalTransactionId !== this.referenceExternalTransactionId
     ) {
       throw new FinancialRuleError(FailureCode.InvalidReference);
     }
@@ -296,7 +303,21 @@ export class WagerTransaction {
     }
 
     if (this.referenceExternalTransactionId) {
+      if (this.referenceExternalTransactionId === this.externalTransactionId) {
+        throw new FinancialRuleError(FailureCode.InvalidReference);
+      }
+
       if (!reference) {
+        this.markPendingReference();
+
+        return undefined;
+      }
+
+      this.validateReferenceStructure(reference);
+
+      if (
+        [Status.Pending, Status.PendingReference].includes(reference.status)
+      ) {
         this.markPendingReference();
 
         return undefined;

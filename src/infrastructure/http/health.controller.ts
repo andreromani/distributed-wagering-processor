@@ -1,3 +1,4 @@
+import { ensureDatabaseConnection } from '../database/database-connection.js';
 import {
   Controller,
   Get,
@@ -14,8 +15,6 @@ import { environment } from '../config/environment.js';
 
 @Controller('health')
 export class HealthController {
-  private connecting: Promise<DataSource> | undefined;
-
   constructor(
     @Inject(DataSource) private readonly database: DataSource,
     @Inject(SQSClient) private readonly sqs: SQSClient,
@@ -38,12 +37,7 @@ export class HealthController {
   }
 
   private async checkDatabase() {
-    if (!this.database.isInitialized) {
-      this.connecting ??= this.database.initialize().finally(() => {
-        this.connecting = undefined;
-      });
-      await this.connecting;
-    }
+    await ensureDatabaseConnection(this.database);
 
     await this.database.query('SELECT 1');
   }

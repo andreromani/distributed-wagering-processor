@@ -15,7 +15,11 @@ export interface StoredWager {
 }
 
 export interface WagerTransactionRepository {
-  insert(transaction: WagerTransaction, result?: OriginalResult): Promise<void>;
+  insert(
+    transaction: WagerTransaction,
+    result?: OriginalResult,
+    retry?: { referenceAttempts: number; nextAttemptAt?: Date },
+  ): Promise<void>;
 
   findById(id: string): Promise<StoredWager | undefined>;
 
@@ -41,7 +45,7 @@ export interface WagerTransactionRepository {
     options?: {
       result?: OriginalResult;
       referenceAttempts?: number;
-      nextAttemptAt?: Date;
+      nextAttemptAt?: Date | null;
     },
   ): Promise<void>;
 }

@@ -45,7 +45,7 @@ const open = (amount = '100.00') =>
 const props = (kind = Kind.Bet): CreateWagerTransactionProps => ({
   id: 'tx',
   providerId: 'provider',
-  externalTransactionId: 'external',
+  externalTransactionId: kind === Kind.Bet ? 'external' : 'operation',
   idempotencyKey: 'key',
   payloadHash: 'hash',
   walletId: 'wallet',
@@ -60,7 +60,11 @@ const props = (kind = Kind.Bet): CreateWagerTransactionProps => ({
 });
 
 const processed = (kind = Kind.Bet) => {
-  const tx = WagerTransaction.create({ ...props(kind), id: 'reference' });
+  const tx = WagerTransaction.create({
+    ...props(kind),
+    id: 'reference',
+    externalTransactionId: 'external',
+  });
   tx.markProcessed(kind === Kind.Refund ? 'original-bet' : undefined, at());
 
   return tx;
@@ -515,6 +519,7 @@ for (const field of [
     const reference = WagerTransaction.rehydrate({
       ...props(),
       id: 'ref',
+      externalTransactionId: 'external',
       [field]: 'different',
       status: Status.Processed,
     });
@@ -533,6 +538,7 @@ test('reference rejects currency mismatch', () => {
   const reference = WagerTransaction.rehydrate({
     ...props(),
     id: 'ref',
+    externalTransactionId: 'external',
     money: money('10.00', 'USD'),
     status: Status.Processed,
   });
@@ -565,6 +571,7 @@ for (const kind of [Kind.Loss, Kind.Rollback, Kind.Opening]) {
     const reference = WagerTransaction.rehydrate({
       ...props(kind),
       id: 'ref',
+      externalTransactionId: 'external',
       status: Status.Processed,
     });
 
@@ -598,6 +605,7 @@ for (const status of [
     const reference = WagerTransaction.rehydrate({
       ...props(),
       id: 'ref',
+      externalTransactionId: 'external',
       status,
     });
 
@@ -913,6 +921,7 @@ for (const kind of [Kind.Win, Kind.Refund, Kind.Rollback]) {
       const reference = WagerTransaction.rehydrate({
         ...props(),
         id: 'ref',
+        externalTransactionId: 'external',
         status,
       });
 

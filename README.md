@@ -98,7 +98,24 @@ Para aplicar a migration no banco indicado pelo seu ambiente, execute
     bun run migration:run
     bun run migration:revert
 
-Revert remove as cinco tabelas financeiras e seus dados. Use somente no banco pretendido. Os testes de reversibilidade usam exclusivamente o banco temporário.
+Revert desfaz a migration mais recente. Reverter a fundação remove as cinco tabelas financeiras e seus dados. Use somente no banco pretendido. Os testes de reversibilidade usam exclusivamente o banco temporário.
 Os esquemas TypeORM registram colunas. Revise migrations geradas para preservar constraints e triggers implementadas manualmente.
 
 As garantias de processamento completo, replay HTTP/SQS, eventos, workers e múltiplas instâncias dependem das etapas seguintes.
+
+## Núcleo transacional
+
+FinancialApplicationModule exporta OpenWalletUseCase, ProcessWagerTransactionUseCase e ReprocessPendingReferenceUseCase.
+Os casos de uso recebem contratos de application, com correlação e inbox opcionais, e retornam resultados independentes de transporte.
+Os testes executam abertura, operações financeiras, replay, rejeições, pendências, inbox/outbox e rollback com PostgreSQL real.
+
+Aplique as migrations antes de usar os casos de uso no banco configurado
+
+    bun run migration:run
+
+A migration incremental RejectedSnapshots1797000001000 permite preservar saldo/versão das rejeições para replay.
+Seu downgrade remove esses snapshots de REJECTED/FAILED ao restaurar a constraint anterior, preservando wallets e ledger. Planeje reversões em dados reais.
+Os testes usam bancos temporários e validam run/revert/run sem modificar o banco de desenvolvimento.
+
+O processamento de referência é invocado explicitamente por ID. O padrão tem cinco tentativas totais, TTL de 24h e backoff inicial de 1s, limitado a 60s. Relógio e política podem ser injetados para testes determinísticos.
+Os eventos são gravados na outbox na transação financeira. O consumidor e os workers serão conectados nas etapas seguintes.

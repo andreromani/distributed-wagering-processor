@@ -1,6 +1,7 @@
 import { EntityManager } from 'typeorm';
 import type { InboxRecord } from '../../../application/ports/financial-context.js';
 import { InboxRowSchema } from '../entities/inbox-message.schema.js';
+import { inboxFromRow, inboxToRow } from '../mappers/inbox-message.mapper.js';
 import { requireTransaction } from './transaction-context.js';
 
 export class TypeOrmInboxRepository {
@@ -9,13 +10,30 @@ export class TypeOrmInboxRepository {
   async insert(message: InboxRecord): Promise<void> {
     requireTransaction(this.manager);
 
-    await this.manager.insert(InboxRowSchema, {
-      consumer_name: message.consumerName,
-      message_id: message.messageId,
-      payload_hash: message.payloadHash,
-      received_at: message.receivedAt,
-      processed_at: message.processedAt ?? null,
-    });
+    await this.manager.insert(InboxRowSchema, inboxToRow(message));
+  }
+
+  async markProcessed(
+    consumerName: string,
+    messageId: string,
+    at: Date,
+  ): Promise<void> {
+    requireTransaction(this.manager);
+
+    const result = await this.manager
+      .createQueryBuilder()
+      .update(InboxRowSchema)
+      .set({ processed_at: () => 'COALESCE(processed_at, :processedAt)' })
+      .where('consumer_name = :consumerName AND message_id = :messageId', {
+        consumerName,
+        messageId,
+        processedAt: at,
+      })
+      .execute();
+
+    if (result.affected !== 1) {
+      throw new Error('Inbox receipt not found');
+    }
   }
 
   async find(
@@ -27,14 +45,6 @@ export class TypeOrmInboxRepository {
       message_id: messageId,
     });
 
-    return row
-      ? {
-          consumerName: row.consumer_name,
-          messageId: row.message_id,
-          payloadHash: row.payload_hash,
-          receivedAt: row.received_at,
-          processedAt: row.processed_at ?? undefined,
-        }
-      : undefined;
+    return row ? inboxFromRow(row) : undefined;
   }
 }

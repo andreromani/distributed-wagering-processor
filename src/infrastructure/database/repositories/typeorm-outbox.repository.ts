@@ -1,3 +1,7 @@
+import {
+  outboxFromRow,
+  outboxToRow,
+} from '../mappers/outbox-message.mapper.js';
 import { EntityManager } from 'typeorm';
 import type { OutboxRecord } from '../../../application/ports/financial-context.js';
 import { OutboxRowSchema } from '../entities/outbox-message.schema.js';
@@ -9,17 +13,19 @@ export class TypeOrmOutboxRepository {
   async insert(message: OutboxRecord): Promise<void> {
     requireTransaction(this.manager);
 
+    const row = outboxToRow(message);
+
     await this.manager.query(
       'INSERT INTO outbox_messages(id,aggregate_id,event_type,payload,occurred_at,attempts,next_attempt_at,published_at) VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7,$8)',
       [
-        message.id,
-        message.aggregateId,
-        message.eventType,
-        JSON.stringify(message.payload),
-        message.occurredAt,
-        message.attempts,
-        message.nextAttemptAt ?? null,
-        message.publishedAt ?? null,
+        row.id,
+        row.aggregate_id,
+        row.event_type,
+        JSON.stringify(row.payload),
+        row.occurred_at,
+        row.attempts,
+        row.next_attempt_at,
+        row.published_at,
       ],
     );
   }
@@ -45,15 +51,6 @@ export class TypeOrmOutboxRepository {
       .setOnLocked('skip_locked')
       .getMany();
 
-    return rows.map((row) => ({
-      id: row.id,
-      aggregateId: row.aggregate_id,
-      eventType: row.event_type,
-      payload: row.payload,
-      occurredAt: row.occurred_at,
-      attempts: row.attempts,
-      nextAttemptAt: row.next_attempt_at ?? undefined,
-      publishedAt: row.published_at ?? undefined,
-    }));
+    return rows.map(outboxFromRow);
   }
 }

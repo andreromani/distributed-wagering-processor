@@ -59,12 +59,15 @@ export class TypeOrmWagerTransactionRepository implements WagerTransactionReposi
   async insert(
     transaction: WagerTransaction,
     result?: OriginalResult,
+    retry?: { referenceAttempts: number; nextAttemptAt?: Date },
   ): Promise<void> {
     requireTransaction(this.manager);
 
     await this.manager.insert(WagerRowSchema, {
       ...wagerToRow(transaction),
       ...snapshot(transaction, result),
+      reference_attempts: retry?.referenceAttempts ?? 0,
+      next_attempt_at: retry?.nextAttemptAt ?? null,
     });
   }
 
@@ -106,7 +109,7 @@ export class TypeOrmWagerTransactionRepository implements WagerTransactionReposi
     options: {
       result?: OriginalResult;
       referenceAttempts?: number;
-      nextAttemptAt?: Date;
+      nextAttemptAt?: Date | null;
     } = {},
   ): Promise<void> {
     requireTransaction(this.manager);

@@ -28,6 +28,12 @@ export interface FinancialContext {
   inbox: {
     insert(message: InboxRecord): Promise<void>;
 
+    markProcessed(
+      consumerName: string,
+      messageId: string,
+      at: Date,
+    ): Promise<void>;
+
     find(
       consumerName: string,
       messageId: string,
