@@ -1,0 +1,30 @@
+# Dependencies
+/node_modules
+
+# Build
+/dist
+*.tsbuildinfo
+
+# Tests
+/coverage
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Logs
+/logs
+*.log
+
+# IDE
+/.idea
+/.vscode
+
+# Operating system
+.DS_Store
+Thumbs.db
+
+# Temporary files
+/tmp
+/temp
