@@ -335,3 +335,28 @@ bun test
 ```
 
 O smoke de integração usa dist/main.js com consumer e publisher habilitados em subprocesso Bun. No Windows, o teste dispara o lifecycle SIGTERM por IPC dentro do subprocesso. A validação distribuída com três processos, sinais nativos do sistema operacional e crash abrupto será consolidada posteriormente.
+
+## Referências pendentes — Etapa 10
+
+Após aplicar as migrations existentes, habilite o worker automático em PowerShell.
+
+```powershell
+$env:PENDING_REFERENCE_WORKER_ENABLED = 'true'
+$env:PENDING_REFERENCE_POLL_INTERVAL_MS = '1000'
+$env:PENDING_REFERENCE_BATCH_SIZE = '20'
+bun run build
+bun run start
+```
+
+PENDING_REFERENCE_WORKER_ENABLED é false por padrão. O intervalo aceita de 10 a 60000 ms, e o lote de 1 a 100 transações. HTTP_ENABLED, SQS_CONSUMER_ENABLED e OUTBOX_PUBLISHER_ENABLED continuam controlando os outros componentes. Para executar todos juntos, habilite os quatro flags. Para executar somente referências pendentes, use HTTP_ENABLED=false e mantenha consumer e publisher desligados. Em NODE_ENV=test, os três workers exigem inicialização explícita pelos testes.
+
+O worker busca PENDING_REFERENCE com nextAttemptAt vencido ou ausente e também pendências cujo TTL já expirou. Cada candidato passa pelo ReprocessPendingReferenceUseCase existente. A operação bloqueia a wallet e relê estado e agendamento antes de aplicar qualquer transição. Referência ainda ausente mantém o backoff existente de 1s, 2s, 4s e assim por diante, limitado a 60s. Cinco tentativas totais incluem a submissão inicial. O TTL é de 24 horas desde a criação. Esgotamento ou expiração gera REJECTED com REFERENCE_NOT_FOUND e evento na outbox.
+
+Agendamento e tentativas ficam no PostgreSQL. Ao reiniciar, uma nova instância consulta as pendências persistidas. Falhas transitórias preservam rollback e permitem recuperação posterior. O shutdown interrompe novas buscas e drena ou cancela cooperativamente a rodada antes do fechamento do DataSource, usando os deadlines dos workers existentes.
+
+```powershell
+bun test test/unit/pending-reference-worker.test.ts
+bun test test/integration/pending-reference-worker.test.ts
+```
+
+Os testes de integração usam banco temporário exclusivo, relógio controlado e verificam saldo, ledger e outbox. Dois workers concorrentes no mesmo processo verificam a arbitragem SQL. A validação final com três processos independentes permanece para a etapa distribuída.

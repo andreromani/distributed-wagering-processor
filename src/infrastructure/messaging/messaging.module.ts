@@ -13,10 +13,38 @@ import { WagerMessageHandler } from './consumers/wager-message-handler.js';
 import { WagerTransactionConsumer } from './consumers/wager-transaction.consumer.js';
 import { OutboxPublisher } from './publishers/outbox.publisher.js';
 import { MessagingLifecycle } from './messaging-lifecycle.js';
+import { PendingReferenceWorker } from './consumers/pending-reference.worker.js';
+import { TypeOrmPendingReferenceReader } from '../database/repositories/typeorm-pending-reference.reader.js';
+import { ReprocessPendingReferenceUseCase } from '../../application/use-cases/reprocess-pending-reference.use-case.js';
 
 @Module({
   imports: [FinancialApplicationModule, DatabaseModule, SqsModule],
   providers: [
+    {
+      provide: TypeOrmPendingReferenceReader,
+      inject: [DataSource],
+      useFactory: (source: DataSource) =>
+        new TypeOrmPendingReferenceReader(source),
+    },
+    {
+      provide: PendingReferenceWorker,
+      inject: [
+        TypeOrmPendingReferenceReader,
+        ReprocessPendingReferenceUseCase,
+        MessagingDiagnostics,
+      ],
+      useFactory: (
+        reader: TypeOrmPendingReferenceReader,
+        reprocess: ReprocessPendingReferenceUseCase,
+        diagnostics: MessagingDiagnostics,
+      ) =>
+        new PendingReferenceWorker(
+          reader,
+          reprocess,
+          environment().workers,
+          diagnostics,
+        ),
+    },
     {
       provide: MessagingDiagnostics,
       useFactory: () => new MessagingDiagnostics(),
@@ -84,20 +112,40 @@ import { MessagingLifecycle } from './messaging-lifecycle.js';
     },
     {
       provide: MessagingLifecycle,
-      inject: [WagerTransactionConsumer, OutboxPublisher],
+      inject: [
+        WagerTransactionConsumer,
+        OutboxPublisher,
+        PendingReferenceWorker,
+      ],
       useFactory: (
         consumer: WagerTransactionConsumer,
         publisher: OutboxPublisher,
+        pendingReference: PendingReferenceWorker,
       ) => {
         const options = environment().workers;
         const lifecycleOptions =
           process.env.NODE_ENV === 'test'
-            ? { ...options, consumerEnabled: false, publisherEnabled: false }
+            ? {
+                ...options,
+                consumerEnabled: false,
+                publisherEnabled: false,
+                pendingReferenceEnabled: false,
+              }
             : options;
-        return new MessagingLifecycle(consumer, publisher, lifecycleOptions);
+        return new MessagingLifecycle(
+          consumer,
+          publisher,
+          lifecycleOptions,
+          pendingReference,
+        );
       },
     },
   ],
-  exports: [WagerTransactionConsumer, OutboxPublisher, MessagingDiagnostics],
+  exports: [
+    WagerTransactionConsumer,
+    OutboxPublisher,
+    PendingReferenceWorker,
+    MessagingDiagnostics,
+  ],
 })
 export class MessagingModule {}

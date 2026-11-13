@@ -10,7 +10,11 @@ export type MessagingMetric =
   | 'publishFailures'
   | 'pending'
   | 'exhausted'
-  | 'visibilityFailures';
+  | 'visibilityFailures'
+  | 'pendingReferenceResolved'
+  | 'pendingReferenceRescheduled'
+  | 'pendingReferenceRejected'
+  | 'pendingReferenceFailures';
 
 export class MessagingDiagnostics {
   readonly instanceId = crypto.randomUUID();

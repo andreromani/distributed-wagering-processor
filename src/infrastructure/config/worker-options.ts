@@ -2,6 +2,9 @@ export interface WorkerOptions {
   readonly httpEnabled: boolean;
   readonly consumerEnabled: boolean;
   readonly publisherEnabled: boolean;
+  readonly pendingReferenceEnabled: boolean;
+  readonly pendingReferencePollMs: number;
+  readonly pendingReferenceBatchSize: number;
   readonly eventQueueName: string;
   readonly concurrency: number;
   readonly sqsBatchSize: number;
@@ -51,6 +54,19 @@ export function workerOptions(
     httpEnabled: flag('HTTP_ENABLED', true),
     consumerEnabled: flag('SQS_CONSUMER_ENABLED', false),
     publisherEnabled: flag('OUTBOX_PUBLISHER_ENABLED', false),
+    pendingReferenceEnabled: flag('PENDING_REFERENCE_WORKER_ENABLED', false),
+    pendingReferencePollMs: integer(
+      'PENDING_REFERENCE_POLL_INTERVAL_MS',
+      1000,
+      10,
+      60000,
+    ),
+    pendingReferenceBatchSize: integer(
+      'PENDING_REFERENCE_BATCH_SIZE',
+      20,
+      1,
+      100,
+    ),
     eventQueueName:
       env.SQS_EVENTS_QUEUE_NAME ?? 'wager-integration-events.fifo',
     concurrency: integer('SQS_CONSUMER_CONCURRENCY', 5, 1, 10),
