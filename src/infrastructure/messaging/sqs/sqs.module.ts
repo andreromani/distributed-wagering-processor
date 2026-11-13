@@ -11,7 +11,13 @@ import { SqsLifecycle } from './sqs-lifecycle.js';
         new SQSClient({
           ...environment().sqs,
           maxAttempts: 2,
-          requestHandler: { connectionTimeout: 1000, requestTimeout: 2000 },
+          requestHandler: {
+            connectionTimeout: 1000,
+            requestTimeout:
+              environment().workers.longPollSeconds * 1000 +
+              environment().workers.externalTimeoutMs +
+              1000,
+          },
         }),
     },
     SqsLifecycle,

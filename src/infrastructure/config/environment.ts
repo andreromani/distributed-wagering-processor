@@ -1,3 +1,4 @@
+import { workerOptions } from './worker-options.js';
 export function environment(env: NodeJS.ProcessEnv = process.env) {
   const get = (name: string): string => {
     const value = env[name];
@@ -24,6 +25,7 @@ export function environment(env: NodeJS.ProcessEnv = process.env) {
   }
 
   return {
+    workers: workerOptions(env),
     port: port('PORT'),
     database: {
       host: get('POSTGRES_HOST'),

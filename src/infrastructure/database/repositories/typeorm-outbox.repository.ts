@@ -30,6 +30,20 @@ export class TypeOrmOutboxRepository {
     );
   }
 
+  async updatePublication(message: OutboxRecord): Promise<void> {
+    requireTransaction(this.manager);
+    const row = outboxToRow(message);
+    await this.manager.update(
+      OutboxRowSchema,
+      { id: row.id },
+      {
+        attempts: row.attempts,
+        next_attempt_at: row.next_attempt_at,
+        published_at: row.published_at,
+      },
+    );
+  }
+
   async lockDue(now: Date, limit: number): Promise<OutboxRecord[]> {
     requireTransaction(this.manager);
 

@@ -19,9 +19,9 @@ export class OutboxMessage {
   readonly eventType: string;
   readonly #payload: Record<string, unknown>;
   readonly #occurredAt: number;
-  readonly #attempts: number;
-  readonly #nextAttemptAt: number | undefined;
-  readonly #publishedAt: number | undefined;
+  #attempts: number;
+  #nextAttemptAt: number | undefined;
+  #publishedAt: number | undefined;
 
   private constructor(state: OutboxMessageState) {
     this.id = state.id;
@@ -78,6 +78,23 @@ export class OutboxMessage {
     return this.#publishedAt === undefined
       ? undefined
       : new Date(this.#publishedAt);
+  }
+
+  markPublished(at: Date): void {
+    if (!this.isPending()) {
+      throw new Error('Outbox message already published');
+    }
+    this.#publishedAt = timestamp(at);
+    this.#nextAttemptAt = undefined;
+  }
+
+  scheduleRetry(at: Date, delayMs: number): void {
+    if (!this.isPending() || !Number.isSafeInteger(delayMs) || delayMs < 0) {
+      throw new Error('Invalid outbox retry');
+    }
+    const next = timestamp(new Date(timestamp(at) + delayMs));
+    this.#attempts = Math.min(2147483647, this.#attempts + 1);
+    this.#nextAttemptAt = next;
   }
 
   isPending(): boolean {

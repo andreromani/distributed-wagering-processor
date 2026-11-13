@@ -43,7 +43,12 @@ export class HealthController {
   }
 
   private async checkSqs() {
-    for (const QueueName of [environment().queueName, environment().dlqName]) {
+    const config = environment();
+    const queues = [config.queueName, config.dlqName];
+    if (config.workers.publisherEnabled) {
+      queues.push(config.workers.eventQueueName);
+    }
+    for (const QueueName of queues) {
       const { QueueUrl } = await this.sqs.send(
         new GetQueueUrlCommand({ QueueName }),
         { abortSignal: AbortSignal.timeout(2500) },

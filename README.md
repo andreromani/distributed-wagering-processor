@@ -201,3 +201,137 @@ Resposta observada na demonstração com JavaScript compilado e banco temporári
   "processedAt": "2026-11-13T13:27:44.326Z"
 }
 ```
+
+## Mensageria — Etapa 9
+
+O consumer reutiliza o processamento financeiro HTTP e a inbox persistente. O publisher lê a outbox confirmada e envia seus envelopes para wager-integration-events.fifo. A entrada permanece wager-transactions.fifo e a DLQ permanece wager-transactions-dlq.fifo.
+
+Atualize o Compose e aplique as migrations no ambiente pretendido antes de habilitar os workers.
+
+```powershell
+docker compose up -d
+docker compose ps
+bun install --frozen-lockfile
+bun run migration:run
+bun run build
+```
+
+O hook idempotente do LocalStack provisiona as três filas. Para reaplicá-lo e consultar os atributos, execute
+
+```powershell
+docker compose exec -T localstack sh /etc/localstack/init/ready.d/init-queues.sh
+bun scripts/sqs.ts queues
+```
+
+Os workers ficam desligados por padrão. As variáveis são booleanos literais true/false. Execute uma das configurações abaixo em seu terminal PowerShell.
+
+```powershell
+# API HTTP
+$env:HTTP_ENABLED = 'true'
+$env:SQS_CONSUMER_ENABLED = 'false'
+$env:OUTBOX_PUBLISHER_ENABLED = 'false'
+bun run start
+
+# Consumer
+$env:HTTP_ENABLED = 'false'
+$env:SQS_CONSUMER_ENABLED = 'true'
+$env:OUTBOX_PUBLISHER_ENABLED = 'false'
+bun run start
+
+# Publisher
+$env:HTTP_ENABLED = 'false'
+$env:SQS_CONSUMER_ENABLED = 'false'
+$env:OUTBOX_PUBLISHER_ENABLED = 'true'
+bun run start
+
+# API, consumer e publisher
+$env:HTTP_ENABLED = 'true'
+$env:SQS_CONSUMER_ENABLED = 'true'
+$env:OUTBOX_PUBLISHER_ENABLED = 'true'
+bun run start
+```
+
+Ctrl+C aciona o encerramento gracioso no terminal Windows. O bootstrap também registra SIGTERM. Os workers param a admissão, drenam trabalho em andamento e liberam recursos nessa ordem. O prazo padrão é 30s, com cancelamento cooperativo e reserva para SQL e chamadas externas. A configuração exige que WORKER_PROCESSING_TIMEOUT_MS caiba nesse orçamento.
+
+| Variável | Padrão | Finalidade |
+| --- | --- | --- |
+| HTTP_ENABLED | true | Habilitar servidor HTTP |
+| SQS_CONSUMER_ENABLED | false | Habilitar consumer |
+| OUTBOX_PUBLISHER_ENABLED | false | Habilitar publisher |
+| SQS_EVENTS_QUEUE_NAME | wager-integration-events.fifo | Destino dos eventos |
+| SQS_CONSUMER_CONCURRENCY | 5 | Capacidade de processamento, de 1 a 10 |
+| SQS_BATCH_SIZE | 10 | Máximo solicitado por recepção, de 1 a 10 |
+| SQS_LONG_POLL_SECONDS | 20 | Espera de ReceiveMessage, de 1 a 20s |
+| SQS_VISIBILITY_TIMEOUT | 30 | Visibilidade inicial e renovada |
+| SQS_MAX_RECEIVE_COUNT | 5 | Limite alinhado à redrive policy |
+| SQS_RETRY_BASE_SECONDS | 1 | Backoff inicial de entrega/polling |
+| SQS_RETRY_MAX_SECONDS | 60 | Teto do backoff de entrega/polling |
+| WORKER_EXTERNAL_TIMEOUT_MS | 3000 | Timeout individual das operações SQS |
+| WORKER_PROCESSING_TIMEOUT_MS | 18000 | Limite de uma entrega ou rodada do publisher |
+| WORKER_SHUTDOWN_TIMEOUT_MS | 30000 | Orçamento de encerramento |
+| OUTBOX_BATCH_SIZE | 20 | Máximo de eventos por rodada |
+| OUTBOX_POLL_INTERVAL_MS | 1000 | Intervalo normal de polling |
+| OUTBOX_RETRY_BASE_MS | 1000 | Backoff inicial de publicação |
+| OUTBOX_RETRY_MAX_MS | 60000 | Teto de backoff de publicação/polling |
+
+A recepção efetiva usa o mínimo entre lote e concorrência. Mensagens do mesmo grupo são sequenciais. Grupos distintos podem progredir em paralelo. Ao alterar maxReceiveCount ou o visibility timeout no ambiente, reaplique o hook para alinhar os atributos das filas. O producer deve preferir MessageGroupId igual a walletId. FIFO complementa as garantias do PostgreSQL.
+
+Exemplo executável em PowerShell com a API habilitada. Use o consumer habilitado em outra instância ou na mesma aplicação. O arquivo é gravado em UTF-8 sem BOM para funcionar também no Windows PowerShell 5.1.
+
+```powershell
+$apiBase = 'http://localhost:3000'
+$walletBody = @{
+  playerId = [guid]::NewGuid().ToString()
+  initialBalance = @{ amount = '100.00'; currency = 'BRL' }
+} | ConvertTo-Json -Depth 4
+$wallet = Invoke-RestMethod -Method Post -Uri "$apiBase/wallets" `
+  -ContentType 'application/json' -Body $walletBody
+$externalId = [guid]::NewGuid().ToString()
+$message = @{
+  messageId = [guid]::NewGuid().ToString()
+  type = 'WagerTransactionRequested'
+  occurredAt = [DateTime]::UtcNow.ToString('o')
+  correlationId = [guid]::NewGuid().ToString()
+  data = @{
+    providerId = 'provider-a'
+    externalTransactionId = $externalId
+    idempotencyKey = "provider-a:$externalId"
+    playerId = $wallet.playerId
+    walletId = $wallet.id
+    roundId = 'round-sqs'
+    gameId = 'fortune-chimp'
+    kind = 'BET'
+    money = @{ amount = '25.00'; currency = 'BRL' }
+  }
+}
+$messageJson = $message | ConvertTo-Json -Depth 6
+$messagePath = Join-Path (Get-Location) 'transaction-message.json'
+[IO.File]::WriteAllText($messagePath, $messageJson, [Text.UTF8Encoding]::new($false))
+bun scripts/sqs.ts send $messagePath
+
+Invoke-RestMethod -Uri "$apiBase/providers/provider-a/wagering/transactions/$externalId"
+Invoke-RestMethod -Uri "$apiBase/wallets/$($wallet.id)"
+Invoke-RestMethod -Method Post -Uri "$apiBase/wallets/$($wallet.id)/reconciliation"
+
+bun scripts/sqs.ts dlq
+bun scripts/sqs.ts events
+```
+
+A ferramenta send valida o envelope e usa walletId como grupo FIFO. Cada envio recebe nova deduplication ID do broker, mantendo o messageId de negócio do arquivo. Repetir o envio do mesmo arquivo exercita a idempotência persistente. A ferramenta imprime as identidades de negócio e broker. As inspeções dlq e events usam ReceiveMessage com visibilidade zero e exibem o conteúdo solicitado. Essa leitura pode incrementar o contador de recebimentos. A recuperação administrativa da DLQ será manual e deverá conferir causa, identidade, conteúdo e resultado financeiro antes de qualquer redrive.
+
+Rejeições financeiras e referências pendentes persistidas recebem ACK após commit. JSON/envelope inválido e conflitos permanentes são enviados à DLQ antes da exclusão da origem. Falhas transitórias mudam a visibilidade e chegam à DLQ pelo redrive nativo quando esgotadas. Falha no ACK permite redelivery seguro. O publisher oferece at-least-once com eventId estável, backoff e recuperação de linhas pendentes. O processamento concorrente de publishers pode alterar a ordem causal entre eventos da mesma wallet. Os consumidores futuros precisam deduplicar por eventId.
+
+Em NODE_ENV=test, o lifecycle desabilita a inicialização automática dos workers, inclusive quando os flags de desenvolvimento estão ligados. As integrações habilitam seus workers explicitamente e usam bancos e filas temporários. O smoke usa NODE_ENV=production para exercitar o bootstrap normal.
+
+```powershell
+$env:HTTP_ENABLED = 'true'
+$env:SQS_CONSUMER_ENABLED = 'false'
+$env:OUTBOX_PUBLISHER_ENABLED = 'false'
+bun run build
+bun test test/unit/messaging.test.ts
+bun test test/integration/messaging.test.ts
+bun run test:integration
+bun test
+```
+
+O smoke de integração usa dist/main.js com consumer e publisher habilitados em subprocesso Bun. No Windows, o teste dispara o lifecycle SIGTERM por IPC dentro do subprocesso. A validação distribuída com três processos, sinais nativos do sistema operacional e crash abrupto será consolidada posteriormente.

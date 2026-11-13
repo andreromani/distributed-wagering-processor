@@ -350,3 +350,92 @@ Passaram as 50 duplicatas HTTP com um efeito financeiro, as duas BET de 80.00 co
 Um smoke test adicional carregou AppModule e configureHttp do JavaScript compilado em dist, com Bun, banco temporário próprio e porta efêmera. Observou abertura HTTP 201 com saldo 1000.00, BET HTTP 200 com saldo 975.00, versão 2 e reconciliação consistent true/difference 0.00/checkedEntries 2. O banco dessa demonstração foi removido no finally.
 
 A instalação inicial encontrou EPERM no cache do Bun e foi concluída com execução autorizada fora do sandbox. Docker e os testes completos com subprocessos de migrations também utilizaram execução autorizada. Foram corrigidos erros de tipagem e avisos de lint nos novos testes durante o desenvolvimento. As execuções finais não apresentaram falha intermitente, erro ou warning de lint. Não houve alteração de schema ou migration nesta etapa. Não há endpoint obrigatório pendente na seção 9.
+
+## Etapa 9 — Consumer SQS e Transactional Outbox Publisher
+
+### Composição e infraestrutura
+
+MessagingModule integra SqsTransport, WagerMessageHandler, WagerTransactionConsumer, OutboxPublisher, MessagingDiagnostics e MessagingLifecycle ao monólito NestJS. A inicialização dos workers depende de flags explícitas, ambas false por padrão. O bootstrap permite API HTTP, workers sem servidor HTTP ou todos os componentes no mesmo processo. Os casos de uso financeiros continuam compartilhados entre HTTP e SQS.
+
+Foram preservadas wager-transactions.fifo e wager-transactions-dlq.fifo. A fila adicional wager-integration-events.fifo demonstra publicação real dos envelopes da outbox. Ela recebe somente eventos de saída. O hook do LocalStack cria e atualiza as três filas de forma idempotente. A entrada mantém visibility 30s, long polling 20s e redrive após cinco recebimentos. Eventos e DLQ são FIFO. A readiness inclui a fila de saída quando o publisher está habilitado. O consumer verifica a correspondência entre a política de redrive do broker, o ARN da DLQ e maxReceives da instância antes de iniciar o polling.
+
+O SQSClient existente é compartilhado. Seu request timeout passou a comportar o long polling, com margem para operações externas. Cada chamada recebe AbortSignal com deadline próprio. Recepção usa longPollSeconds + externalTimeoutMs. Envios, ACKs, mudanças de visibilidade e resolução de URLs têm timeout externo individual. Não foram adicionadas dependências nem migrations.
+
+### Identidade, validação e correlação
+
+O envelope usa messageId, type WagerTransactionRequested, occurredAt e data conforme a seção 10. CorrelationId e causationId são opcionais. Mensagens são limitadas operacionalmente a 256 KiB, com JSON objeto, validação estrita, rejeição de campos extras e DTOs aninhados. UUIDs, Money e limites dos campos financeiros reutilizam os DTOs compartilhados extraídos de infrastructure/http para infrastructure/validation, com reexports para preservar imports anteriores. O consumer não depende de controllers ou requisições HTTP. A validação recusa namespaces internos, OPENING e referências ausentes/inaplicáveis antes do caso de uso. Money continua sendo validado pelo Value Object e as regras financeiras permanecem no domínio.
+
+A inbox utiliza consumerName constante wager-financial-v1 e messageId do envelope de negócio. Esse nome é compartilhado entre instâncias. O MessageId do SQS identifica o envio no broker e aparece em diagnóstico. ReceiptHandle identifica somente a entrega atual e é usado em DeleteMessage/ChangeMessageVisibility. MessageDeduplicationId do FIFO é uma otimização com janela limitada. Idempotency-Key identifica a operação financeira globalmente. Nenhum ReceiptHandle, instanceId ou processId integra a identidade persistente da inbox.
+
+O hash financeiro e o hash da inbox permanecem calculados pelo núcleo da Etapa 7.1. O hash da inbox inclui a chave de idempotência e o conteúdo financeiro. CorrelationId informado segue o formato HTTP existente. Na ausência, é gerado UUID por entrega. CausationId informado é preservado, com messageId do envelope como padrão. Os eventos de uma operação confirmada preservam a correlação originalmente persistida.
+
+### Consumo e FIFO
+
+WagerMessageHandler valida, mapeia explicitamente para ProcessWagerInput, inclui inbox e chama o mesmo ProcessWagerTransactionUseCase utilizado pelo HTTP. Não abre outra transação financeira. O retorno do caso de uso ocorre após commit. PROCESSED, REJECTED e PENDING_REFERENCE com canAcknowledge true recebem ACK. Rejeições financeiras normais mantêm sua auditoria e seus eventos. PENDING_REFERENCE já está durável e recebe ACK, deixando a resolução para o scheduler da próxima etapa.
+
+O consumer recebe no máximo min(SQS_BATCH_SIZE, SQS_CONSUMER_CONCURRENCY) mensagens por rodada e aguarda sua conclusão antes do próximo poll. Agrupa pelo MessageGroupId e processa sequencialmente cada grupo, com grupos diferentes em paralelo e concorrência limitada. A recomendação para produtores é MessageGroupId igual a walletId. O PostgreSQL continua sendo a garantia financeira. Em caso de retry, os itens seguintes daquele grupo não são processados. Sua visibilidade é devolvida com o backoff da cabeça mais um segundo, respeitando o teto SQS, para manter a cabeça elegível primeiro. Trabalhos ainda não iniciados no shutdown são devolvidos preservando o atraso calculado para o grupo quando aplicável.
+
+ReceiveMessage usa long polling e solicita ApproximateReceiveCount e MessageGroupId. Polls vazios recebem uma pausa adicional de 100 ms para evitar busy loop em respostas antecipadas. Falhas no polling têm backoff exponencial limitado. A política de publicação da outbox é independente da recepção.
+
+### Classificação, ACK e DLQ
+
+Resultados PROCESSED, REJECTED e PENDING_REFERENCE confirmados recebem ACK. FAILED terminal persistido é encaminhado explicitamente à DLQ com código TERMINAL_FAILED, preservando o registro financeiro. Wallet inexistente é transitória, permitindo criação posterior dentro do limite de entregas. TRANSIENT_FAILURE, falhas recuperáveis de persistência e erros desconhecidos usam retry limitado pelo broker. Contexto incompatível, namespace reservado, payload inválido e conflitos de inbox/idempotência/identidade externa são permanentes. Os demais erros de aplicação permanentes também são encaminhados à DLQ, incluindo PERMANENT_FAILURE, WALLET_CONFLICT e TRANSACTION_NOT_FOUND quando encontrados nesse adaptador. Erros desconhecidos nunca viram rejeição financeira artificial.
+
+O handler confirma SendMessage na DLQ antes de DeleteMessage na entrada. A DLQ recebe o corpo original, failureCode, originalSqsMessageId, receiveCount e businessMessageId quando conhecido. O grupo FIFO é preservado e a deduplication ID é SHA-256 do MessageId original do SQS, estável para redelivery desse envio. Falha no envio impede exclusão da origem. Falha no Delete após envio confirmado permite repetição. Esse encaminhamento tem semântica at-least-once, sem atomicidade entre duas chamadas SQS.
+
+Falhas transitórias utilizam ChangeMessageVisibility com 1s, 2s, 4s etc., limitadas a 60s por padrão. ApproximateReceiveCount acompanha entregas. Na quinta falha, a mensagem permanece sem ACK e a recepção seguinte aciona o redrive nativo. O handler não executa outro SendMessage à DLQ para esgotamento transitório. Falhas persistentes de ACK após encaminhamento explícito também podem terminar em redrive nativo, permitindo duplicatas na DLQ. A identidade de negócio e o diagnóstico devem orientar uma recuperação administrativa futura.
+
+DeleteMessage usa o ReceiptHandle atual. Falha de ACK após commit mantém wallet, transação, ledger, inbox e outbox confirmados. Redelivery reproduz o resultado persistido e pode concluir o ACK, sem novo movimento. Inspeção da DLQ é manual e nenhuma mensagem é reintroduzida automaticamente nesta etapa.
+
+### Visibilidade e shutdown
+
+MessageLease inicia um deadline e renovação de visibilidade assim que o lote é recebido, incluindo mensagens aguardando no grupo. A renovação ocorre a cada visibility/3 e tem uma única chamada pendente por entrega. O limite padrão de processamento é 18s. Falha na renovação cancela cooperativamente a operação financeira. O fim do processamento cancela timers e aguarda a renovação pendente antes de ACK, retry ou DLQ, evitando que uma renovação tardia sobrescreva o backoff.
+
+O adaptador TypeOrmFinancialTransaction ganhou suporte opcional de cancelamento via AsyncLocalStorage e wrappers das portas de repositório. Esse ajuste foi necessário para garantir rollback de trabalho interrompido pelo worker. O sinal é verificado antes/depois de cada operação e antes do commit. O fluxo HTTP sem esse contexto preserva seu comportamento. Não há Promise.race que abandone uma transação em execução. Uma query já iniciada termina sob os timeouts SQL existentes, e a tentativa faz rollback antes de liberar recursos.
+
+MessagingLifecycle inicia workers em onApplicationBootstrap e drena ambos em onModuleDestroy. SqsLifecycle passou a destruir o client em onApplicationShutdown. O DataSource também é fechado nessa fase posterior. Assim, ACKs, devoluções de visibilidade e callbacks SQL terminam antes da destruição dos recursos. Novos polls são cancelados e o publisher deixa de selecionar novas linhas. O orçamento padrão de shutdown dos workers é 30s. A drenagem cooperativa reserva max(10s, 2 * externalTimeout + 5s) para operações externas em andamento, conclusão/rollback de SQL e devolução de visibilidade. Configurações incompatíveis com esse orçamento são rejeitadas.
+
+Quando o deadline é atingido, o sinal interrompe o trabalho antes de uma nova operação ou commit. Transações já confirmadas continuam duráveis, mesmo se o ACK ficar para redelivery. Recursos só são encerrados depois que as tarefas se assentam. Essas garantias dependem dos timeouts de conexão/query já configurados e dos adaptadores cooperativos implementados. O teste de deadline verifica rollback depois de uma escrita de wallet, seguido de redelivery seguro.
+
+### Publisher e concorrência
+
+OutboxPublisher lê eventos persistidos por polling, independentemente do processo que os criou. TypeOrmOutboxDeliveryStore abre uma transação específica de publicação, seleciona uma linha elegível com FOR UPDATE SKIP LOCKED, executa o envio limitado por timeout e atualiza somente os metadados da outbox. Cada transação contém um evento. OUTBOX_BATCH_SIZE limita o número de transações por rodada. Isso evita manter vinte locks durante uma sequência de envios e permite que publishers independentes avancem por registros diferentes. Locks de wallet não participam dessa etapa e a transação financeira original já terminou.
+
+A porta IntegrationEventPublisher recebe OutboxMessage e o adaptador SQS envia o payload originalmente persistido, com MessageGroupId igual a aggregateId e MessageDeduplicationId igual a eventId. EventId, occurredAt, version, dados e correlação permanecem estáveis. A confirmação precisa retornar MessageId antes de marcar publishedAt. Sucesso exclui o evento das seleções normais. Falha preserva o evento, incrementa attempts e calcula nextAttemptAt com backoff exponencial de 1s até 60s. Não existe descarte por limite de tentativas. O contador attempts satura no limite integer do schema para evitar overflow após falhas extremas, mantendo o evento recuperável.
+
+Falha de banco no polling tem backoff exponencial próprio. O contador de pendentes inclui eventos aguardando seu próximo vencimento. Os resultados são tratados por evento, permitindo sucesso de uma linha e retry de outra. Uma interrupção após envio e antes do commit de publishedAt deixa a linha elegível para recuperação. O envio seguinte utiliza o mesmo eventId. A deduplicação FIFO pode suprimir uma repetição durante sua janela, mas consumidores futuros precisam de deduplicação persistente por eventId.
+
+A publicação oferece at-least-once. A seleção ordena vencimento, ocorrência e ID, mas publishers concorrentes podem ultrapassar uma linha bloqueada, inclusive do mesmo agregado. FIFO preserva a ordem em que o broker recebe os envios do grupo. Não é oferecida ordenação causal absoluta entre registros da mesma wallet. O contrato do desafio não exige essa garantia adicional.
+
+### Observabilidade e configuração
+
+MessagingDiagnostics produz JSON com instanceId de diagnóstico e, quando disponíveis, consumerName, IDs de negócio/broker, correlação, causalidade, transactionId, walletId, eventId, attempt e failureCode. ReceiptHandle, SQL, credenciais e corpo financeiro ficam fora dos logs. Os contadores têm nomes fixos para recebidas, processadas, replays, rejeições, retries, DLQ, ACKs falhos, publicações, falhas de publicação, esgotamento e falhas de visibilidade. Pending é um gauge de eventos pendentes. Os identificadores não viram labels de métricas. Os valores são por processo e a exposição consolidada fica para observabilidade.
+
+As opções validadas estão em worker-options.ts e os padrões em .env.example. Consumer e publisher ficam desligados por padrão, mantendo os testes HTTP anteriores isolados de consumo inesperado. HTTP_ENABLED false inicializa ApplicationContext com os workers selecionados. O diretório scripts contém uma ferramenta Bun para envio e inspeção, sem instalação de AWS CLI no Windows.
+
+### Estratégia de testes
+
+Os testes reais utilizam banco wager_messaging_<uuid> exclusivo e três filas FIFO temporárias por cenário, com redrive de dois recebimentos e visibilidade de 1s para acelerar a observação. Esses valores não alteram a configuração de desenvolvimento. Registros outbox de fixtures anteriores são aposentados por metadados no banco descartável antes do cenário seguinte. As filas de desenvolvimento são somente consultadas quanto a atributos e provisionadas pelo hook idempotente.
+
+As regressões verificam HTTP/SQS nas duas ordens, inbox por identidade de negócio, redelivery com nova deduplication ID do broker, commit antes do ACK, falha de DLQ, redrive nativo, publicação original, recuperação, dois publishers com conexões distintas, falha após envio antes do commit de metadados, backoff, shutdown com rollback e renovação real além da visibilidade inicial. O teste Nest mantém uma entrega em andamento e confirma o fechamento posterior do SQSClient e do DataSource. O smoke carrega dist/main.js em subprocesso Bun com ambos os workers habilitados e valida processamento e publicação reais.
+
+No Windows, o smoke solicita o lifecycle SIGTERM por IPC e process.emit no subprocesso, exercitando os hooks registrados pelo bootstrap. Isso permite verificar drenagem e encerramento nesse ambiente. A entrega nativa de sinais pelo sistema operacional e crash abrupto com múltiplas instâncias ficam para a etapa distribuída. O scheduler de referências, três processos simultâneos, consumidor de eventos de saída, redrive administrativo e observabilidade completa permanecem fora desta etapa.
+
+Um resultado inicial PENDING ou canAcknowledge false não qualifica ACK. O handler mantém a entrega recuperável com retry limitado e redrive nativo, sinalizando TRANSACTION_NOT_SETTLED para o estado inicial. Essa política cobre registros iniciais legados sem confundi-los com PENDING_REFERENCE já durável e aceito. A configuração e o adaptador também rejeitam colisão entre nomes de entrada, DLQ e eventos para impedir realimentação acidental do consumer.
+
+A composição desabilita auto start em NODE_ENV=test, mesmo quando os flags de desenvolvimento estão ligados. Os testes de mensageria instanciam workers explicitamente ou substituem o lifecycle no módulo isolado. O subprocesso do smoke usa NODE_ENV=production e os flags habilitados para exercitar o bootstrap normal. Uma regressão verifica a ausência de auto start em uma aplicação HTTP de teste com ambos os flags ligados. ApproximateReceiveCount conta recepções, incluindo mensagens devolvidas sem processamento. A quantidade de execuções financeiras é observada separadamente.
+
+### Validação final da Etapa 9
+
+- docker compose config e docker compose ps aprovados, com PostgreSQL e LocalStack saudáveis.
+- bun install --frozen-lockfile aprovado, sem alteração de dependências ou lockfile.
+- bun run build, bun run typecheck e bun run lint aprovados. A verificação adicional de lint em scripts também passou.
+- Prettier aprovado para src, test e scripts, preservando a configuração existente.
+- bun run test:unit aprovado com 333 testes e 1.026 assertions.
+- bun run test:integration aprovado com 133 testes e 788 assertions, usando PostgreSQL e LocalStack reais.
+- bun test aprovado com 466 testes, zero falhas e 1.814 assertions em 13 arquivos. Os 384 testes anteriores foram preservados e 82 testes foram adicionados.
+- Hook de filas executado duas vezes com sucesso. A consulta dos atributos confirmou FIFO, redrive de cinco recebimentos, visibilidade de 30s e long polling de 20s na entrada.
+- Smoke compilado aprovado com Bun, ambos os workers habilitados, processamento financeiro, publicação e encerramento pelo lifecycle SIGTERM solicitado por IPC.
+- git diff --check aprovado. Git informa normalização futura de CRLF para LF nos documentos existentes.
+
+Não houve alteração de schema ou migration. Docker e testes com subprocessos foram executados com autorização fora do sandbox. A execução final das suítes não apresentou falhas. A limitação de entrega nativa de sinais no Windows permanece descrita acima. As seções 10 e 11 possuem implementação nesta etapa, com métricas locais por processo e sem garantia adicional de ordenação causal absoluta entre publishers.

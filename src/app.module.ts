@@ -1,3 +1,4 @@
+import { MessagingModule } from './infrastructure/messaging/messaging.module.js';
 import { FinancialHttpModule } from './infrastructure/http/financial-http.module.js';
 import { FinancialApplicationModule } from './infrastructure/financial-application.module.js';
 import { Module } from '@nestjs/common';
@@ -7,6 +8,7 @@ import { HealthController } from './infrastructure/http/health.controller.js';
 
 @Module({
   imports: [
+    MessagingModule,
     DatabaseModule,
     SqsModule,
     FinancialApplicationModule,
