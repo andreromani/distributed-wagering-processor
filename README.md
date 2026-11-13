@@ -119,3 +119,85 @@ Os testes usam bancos temporários e validam run/revert/run sem modificar o banc
 
 O processamento de referência é invocado explicitamente por ID. O padrão tem cinco tentativas totais, TTL de 24h e backoff inicial de 1s, limitado a 60s. Relógio e política podem ser injetados para testes determinísticos.
 Os eventos são gravados na outbox na transação financeira. O consumidor e os workers serão conectados nas etapas seguintes.
+
+## API HTTP financeira — Etapa 8
+
+Os endpoints financeiros estão sem autenticação nesta etapa. Use o ambiente local. A integração futura com IdP externo e autorização tem ponto de extensão em FinancialHttpModule. Antes de iniciar a aplicação, aplique as migrations no ambiente pretendido e execute bun run build e bun run start.
+
+Exemplo executável em PowerShell. Cada execução cria um jogador novo. Os objetos retornados pelos comandos mostram as respostas reais da aplicação.
+
+```powershell
+$apiBase = 'http://localhost:3000'
+$playerId = [guid]::NewGuid().ToString()
+$walletBody = @{
+  playerId = $playerId
+  initialBalance = @{ amount = '1000.00'; currency = 'BRL' }
+} | ConvertTo-Json -Depth 4
+
+$wallet = Invoke-RestMethod -Method Post -Uri "$apiBase/wallets" `
+  -ContentType 'application/json' -Body $walletBody
+$wallet
+Invoke-RestMethod -Uri "$apiBase/wallets/$($wallet.id)"
+
+$externalId = [guid]::NewGuid().ToString()
+$financialHeaders = @{
+  'Idempotency-Key' = "provider-a:$externalId"
+  'x-correlation-id' = [guid]::NewGuid().ToString()
+}
+$betBody = @{
+  providerId = 'provider-a'
+  externalTransactionId = $externalId
+  playerId = $playerId
+  walletId = $wallet.id
+  roundId = 'round-987'
+  gameId = 'fortune-chimp'
+  kind = 'BET'
+  money = @{ amount = '25.00'; currency = 'BRL' }
+} | ConvertTo-Json -Depth 4
+
+$bet = Invoke-RestMethod -Method Post -Uri "$apiBase/wagering/transactions" `
+  -Headers $financialHeaders -ContentType 'application/json' -Body $betBody
+$bet
+
+# Replay mantém transactionId e saldo original, com idempotentReplay true.
+Invoke-RestMethod -Method Post -Uri "$apiBase/wagering/transactions" `
+  -Headers $financialHeaders -ContentType 'application/json' -Body $betBody
+
+Invoke-RestMethod -Uri "$apiBase/wagering/transactions/$($bet.transactionId)"
+Invoke-RestMethod -Uri "$apiBase/providers/provider-a/wagering/transactions/$externalId"
+
+$page = Invoke-RestMethod -Uri "$apiBase/wallets/$($wallet.id)/ledger?limit=1"
+$page | ConvertTo-Json -Depth 8
+if ($page.nextCursor) {
+  $next = [uri]::EscapeDataString($page.nextCursor)
+  Invoke-RestMethod -Uri "$apiBase/wallets/$($wallet.id)/ledger?limit=1&cursor=$next"
+}
+
+Invoke-RestMethod -Method Post -Uri "$apiBase/wallets/$($wallet.id)/reconciliation"
+Invoke-RestMethod -Uri "$apiBase/health/live"
+Invoke-RestMethod -Uri "$apiBase/health/ready"
+```
+
+A abertura retorna 201, saldo 1000.00 e versão 1. A BET retorna 200, PROCESSED e saldo 975.00. O ledger inclui OPENING e BET. A reconciliação retorna consistent true, difference 0.00 e checkedEntries 2. Valores monetários são strings.
+
+GET de recurso existente retorna 200. A submissão retorna 202 para referência pendente, 422 para rejeição financeira e 500 para um FAILED terminal persistido. Os resultados financeiros incluem transactionId, status, failureCode/snapshot quando disponíveis e idempotentReplay. Consulte as rotas de transação para acompanhar uma pendência. O agendamento automático será implementado posteriormente.
+
+Payload/header inválido retorna 400. Recurso inexistente retorna 404. Wallet duplicada e conflitos de identidade retornam 409. Falha transitória retorna 503. Erros usam statusCode, code, message e correlationId. Invoke-RestMethod lança erro para respostas HTTP 4xx/5xx.
+
+O Idempotency-Key é obrigatório na submissão e aceita até 256 caracteres ASCII imprimíveis, sem vírgula e com conteúdo não branco. A forma provider:externalId é uma recomendação. Identificadores de negócio aceitam até 256 caracteres. x-correlation-id é opcional e aceita até 128 caracteres de letras, números, ponto, sublinhado, dois-pontos e hífen. A resposta sempre inclui x-correlation-id.
+
+O ledger usa cursor opaco com escopo de wallet e precisão de microssegundos. O limite padrão é 50, mínimo 1 e máximo 100. Uma navegação não mantém snapshot entre requisições. A reconciliação executa uma única consulta consistente e sinaliza divergências em resposta, log JSON e contador por processo, preservando os dados.
+
+Resposta observada na demonstração com JavaScript compilado e banco temporário, após a BET de 25.00 do exemplo acima. IDs e horários pertencem àquela execução, cujo banco já foi removido.
+
+```json
+{
+  "transactionId": "12b1a196-60d1-46a6-b444-4779e577aea4",
+  "status": "PROCESSED",
+  "idempotentReplay": false,
+  "createdAt": "2026-11-13T13:27:44.284Z",
+  "balance": { "amount": "975.00", "currency": "BRL" },
+  "walletVersion": 2,
+  "processedAt": "2026-11-13T13:27:44.326Z"
+}
+```

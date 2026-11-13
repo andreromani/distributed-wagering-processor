@@ -11,3 +11,21 @@ test('compiled decorators retain constructor metadata', async () => {
     Reflect.getMetadata('design:paramtypes', compiled.HealthController),
   ).toEqual([DataSource, SQSClient]);
 });
+
+test('compiled financial DTOs retain nested validation metadata', async () => {
+  const walletPath = '../../dist/infrastructure/http/dtos/create-wallet.dto.js';
+  const moneyPath = '../../dist/infrastructure/http/dtos/money.dto.js';
+  const wallet = await import(walletPath);
+  const money = await import(moneyPath);
+
+  expect(
+    Reflect.getMetadata(
+      'design:type',
+      wallet.CreateWalletDto.prototype,
+      'initialBalance',
+    ),
+  ).toBe(money.MoneyDto);
+  expect(
+    Reflect.getMetadata('design:type', money.MoneyDto.prototype, 'amount'),
+  ).toBe(String);
+});

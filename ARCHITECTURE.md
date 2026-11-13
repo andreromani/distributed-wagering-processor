@@ -288,3 +288,65 @@ Com Bun 1.4.4, build, typecheck, lint e Prettier passaram. test:unit concluiu co
 A primeira execução unitária apontou as identidades externas reutilizadas nas fixtures antigas. Após corrigir essas fixtures, todos os testes unitários passaram. Uma execução completa intermediária teve uma falha no cenário de 50 duplicatas. O cenário isolado e a repetição diagnóstica completa passaram. A investigação adicional produziu a regressão determinística de commit entre buscas de identidade descrita acima. Após sua correção, ambas as suítes finais passaram, incluindo o cenário de 50 duplicatas. Não houve retries adicionais na política para contornar esse resultado.
 
 A última verificação git diff --check passou, com avisos de normalização CRLF/LF dos documentos já presentes na árvore de trabalho. Docker e subprocessos Bun das migrations exigiram execução autorizada fora do sandbox. Nenhuma dependência, configuração ou migration foi alterada nesta etapa. Não há bloqueio aberto para a revisão da Etapa 7.1.
+
+## Etapa 8 — API HTTP
+
+### Composição e contratos
+
+FinancialHttpModule registra WalletsController, WageringTransactionsController e ProviderWageringTransactionsController. Os controllers recebem contratos HTTP, chamam os casos de uso e mapeiam resultados explicitamente. OpenWalletUseCase e ProcessWagerTransactionUseCase continuam responsáveis pelas escritas. GetWalletUseCase, GetWagerTransactionUseCase e GetProviderWagerTransactionUseCase usam as buscas existentes sem lock pessimista. ListWalletLedgerUseCase utiliza a extensão findPage do repositório de ledger existente. ReconcileWalletUseCase depende de uma porta de leitura e de uma porta de instrumentação de divergências.
+
+Foram implementadas as sete rotas financeiras da seção 9, com manutenção de /health, /health/live e /health/ready. POST /wallets retorna id, playerId, balance e version. GET /wallets/:walletId usa o mesmo contrato. O processamento retorna transactionId, status, idempotentReplay, datas e snapshot/referência/failureCode quando disponíveis. canAcknowledge e payloadHash ficam fora do contrato HTTP. As consultas de transação incluem identidade, contexto financeiro, MoneyProps, estado, referência, datas e snapshot persistido. GET de uma transação existente retorna 200 para todos os estados, inclusive OPENING interno, pendências, rejeições e FAILED.
+
+### Validação
+
+Foram adicionados class-validator 0.15.1 e class-transformer 0.5.1 para DTOs aninhados com ValidationPipe. A factory httpValidation aplica whitelist, forbidNonWhitelisted, forbidUnknownValues e transformação explícita para as classes DTO, com enableImplicitConversion false. Money numérico, propriedades extras e objetos aninhados inválidos recebem 400. As validações de Money e as invariantes financeiras continuam no domínio. A forma decimal de entrada preserva exatamente duas casas, BRL/USD e o intervalo atual de Money.
+
+Cada parâmetro DTO declara seu expectedType no pipe. Assim, código-fonte executado diretamente pelo Bun e código compilado pelo tsc recebem a mesma validação, sem depender da emissão de design:paramtypes pelo transpiler do Bun. A configuração compartilhada configureHttp instala correlação e filtro de exceções no bootstrap e nos testes HTTP. O uso de ValidationPipe e DTOs concretos segue a documentação oficial consultada da versão NestJS 12 instalada, https://docs.nestjs.com/application/validation.
+
+UUIDs são validados nos DTOs e nas rotas. Os identificadores de provider, operação externa, rodada, jogo e referência aceitam texto não vazio de até 256 caracteres, rejeitando NUL, que não é representável em PostgreSQL text. O schema utiliza text sem limites declarados. O limite HTTP de 256 caracteres é uma escolha operacional para entradas e índices de unicidade, sem impor o padrão provider:externalId. A paginação recebe strings decimais de inteiros entre 1 e 100, com padrão 50 e rejeição de campos de query adicionais ou repetidos. OPENING e namespaces internos são recusados antes de escrita pelo contrato HTTP e pelo núcleo existente.
+
+### Status e erros
+
+Abertura retorna 201. PROCESSED e replay processado retornam 200. PENDING/PENDING_REFERENCE retornam 202. REJECTED retorna 422 como resultado já confirmado pelo caso de uso, com failureCode e snapshot quando existente. FAILED persistido retorna 500 como resultado terminal auditável, reproduzido em replay. Ele pode ser consultado com GET 200. Uma tentativa SQL revertida por indisponibilidade retorna 503/TRANSIENT_FAILURE, preservando a distinção entre essa tentativa e FAILED persistido.
+
+INVALID_INPUT e CONTEXT_MISMATCH retornam 400. WALLET_NOT_FOUND e TRANSACTION_NOT_FOUND retornam 404. WALLET_CONFLICT, IDEMPOTENCY_CONFLICT, EXTERNAL_IDENTITY_CONFLICT e INBOX_CONFLICT retornam 409. Falhas permanentes ou inesperadas retornam 500. O filtro centralizado usa statusCode, code, message e correlationId, com mensagens genéricas que não expõem SQL, constraints, credenciais, stack ou payload. Erros de validação e parâmetros usam o mesmo formato. Exceções dos health checks mantêm seus contratos anteriores.
+
+O header Idempotency-Key é obrigatório somente na submissão de transações. O body não pode fornecer uma chave substituta. São aceitos até 256 caracteres ASCII imprimíveis, com pelo menos um caractere não branco. Duplicatas detectadas em rawHeaders e valores com vírgula são rejeitados como ambíguos. Essa política de vírgula é uma restrição de transporte documentada. A chave é encaminhada integralmente ao núcleo, sem geração automática ou alteração do hash financeiro. Replay usa status e snapshot persistidos. Uma pendência que já terminou passa a responder com o estado terminal vigente, disponível nas duas rotas de consulta.
+
+### Cursor e precisão temporal
+
+A paginação usa created_at ASC,id ASC, cursor da última entrada e consulta de limit + 1. O cursor é Base64URL de JSON com version 1, walletId, createdAt e id. A validação verifica codificação canônica, estrutura exata, versão, UUID, data válida e escopo de wallet. Base64URL representa opacidade de contrato e não autentica o cursor.
+
+findPage mantém a consulta no repositório existente e utiliza o índice wallet_id,created_at,id. A posição é formatada no PostgreSQL com seis dígitos de microssegundos em UTC. O cursor e a resposta do ledger preservam essa string. A reconstrução da entidade pode continuar usando Date, mas essa representação truncada não participa da posição da página. O teste de empate utiliza dados administrativos no banco descartável, alterando somente timestamps com a trigger de imutabilidade temporariamente desabilitada dentro de uma transação e reabilitada antes do commit. Os testes anteriores de imutabilidade continuam ativos.
+
+Um conjunto estável é percorrido sem duplicações ou omissões. Requisições sucessivas não compartilham um snapshot imutável. Novos lançamentos posicionados depois do cursor podem aparecer em páginas seguintes. Lançamentos inseridos posteriormente com posição anterior ao cursor não são recuperados por essa navegação. O cliente deve reiniciar a consulta quando precisar observar todo o conjunto atualizado.
+
+### Reconciliação consistente
+
+TypeOrmWalletReconciliationReader executa uma única consulta SELECT com agregado LATERAL do ledger para a wallet. Em READ COMMITTED, esse único statement observa saldo e ledger no mesmo snapshot, sem lock pessimista e sem carregar os lançamentos em memória. CREDIT soma amount e DEBIT subtrai amount, usando sum(NUMERIC) e COALESCE 0.00. OPENING participa naturalmente. Quantias e difference são retornadas como strings decimais exatas, inclusive resultados assinados, com difference = storedBalance - calculatedBalance. A contagem é o único campo convertido para number, após verificar um inteiro seguro.
+
+Uma divergência retorna HTTP 200 e consistent false. FinancialDiagnostics incrementa reconciliationDivergences e emite JSON com evento wallet_reconciliation_divergence, walletId e correlationId. O contador é por processo, reinicia com a aplicação e fica disponível por getter para integração futura com o exportador de métricas. Nenhum valor financeiro é corrigido e nenhum lançamento é criado. O log omite os valores monetários e o payload completo. O teste de divergência altera saldo somente no banco temporário e verifica ausência de correção. Outro teste mantém uma operação financeira suspensa depois da escrita de ledger, antes do commit, e verifica reconciliação consistente tanto antes quanto depois do commit.
+
+### Correlação e autenticação
+
+x-correlation-id aceita um único identificador de 1 a 128 caracteres em A-Z, a-z, dígitos, ponto, sublinhado, dois-pontos ou hífen. Na ausência, é gerado UUID. O valor validado aparece no header da resposta, nos erros e no contexto passado às operações de escrita e seus eventos outbox. Header inválido recebe 400 com um identificador gerado. Logs de falhas inesperadas/transitórias incluem correlação, código e status, sem mensagens brutas das exceções.
+
+Os endpoints financeiros desta etapa estão sem autenticação. Não estão preparados para exposição pública desprotegida. O ponto de extensão explícito está em FinancialHttpModule, nos três controllers financeiros, para guards que validem tokens de um IdP OIDC externo e autorizem o provider e o acesso às wallets. O desenho futuro deve conferir issuer, audience, assinatura e permissões/identidade do provider. Os health checks permanecem abertos. Não existe autenticação fictícia.
+
+### Escopo e testes
+
+O núcleo transacional da Etapa 7.1 e as migrations foram preservados. A ampliação de leitura do ledger mantém a assinatura anterior findByWallet para os consumidores existentes. O schema e os índices existentes atendem esta etapa. SQS consumer, ack/DLQ, publisher, scheduler, três processos, tracing e métricas operacionais completas continuam nas etapas posteriores.
+
+Os testes novos cobrem DTOs, headers, mapeamento, cursor, consultas, reconciliação assinada e instrumentação. A aplicação HTTP real usa porta efêmera, PostgreSQL e LocalStack reais e banco wager_http_<uuid> exclusivo. O fechamento inclui aplicação, DataSource e banco temporário. Foram exercitados abertura, duplicidade, saldo zero, operações e snapshots, rejeições, pendências e reprocessamento explícito, consultas, microssegundos, divergência, snapshot concorrente, 50 duplicatas HTTP e duas BET de 80.00 sobre 100.00. A concorrência HTTP é executada em um processo Bun, sem comprovar três instâncias independentes.
+
+### Resultados da validação da Etapa 8
+
+Em 13/11/2026, com Bun 1.4.4, docker compose config --quiet passou e docker compose ps confirmou PostgreSQL e LocalStack healthy. Os serviços estavam inicialmente parados e foram iniciados pelo Compose para a execução das integrações.
+
+Build, typecheck, lint e Prettier passaram. bun install --frozen-lockfile confirmou o lockfile sem alterações adicionais. bun run test:unit passou com 277 testes e 914 assertions. bun run test:integration passou com 107 testes e 660 assertions. A execução completa bun test passou com 384 testes, zero falhas e 1574 assertions em 11 arquivos. Foram preservados os 303 testes anteriores e adicionados 81, sendo 50 unitários, 30 HTTP e um de metadados compilados. git diff --check passou, com avisos de normalização CRLF/LF nos documentos.
+
+Passaram as 50 duplicatas HTTP com um efeito financeiro, as duas BET de 80.00 com uma aprovada e saldo 20.00, a paginação com timestamps empatados em 2026-11-13T12:00:00.123456Z e a reconciliação consistente antes/depois do commit coordenado. As falhas de infraestrutura dos testes são controladas no adaptador da aplicação de teste e não interrompem o PostgreSQL compartilhado.
+
+Um smoke test adicional carregou AppModule e configureHttp do JavaScript compilado em dist, com Bun, banco temporário próprio e porta efêmera. Observou abertura HTTP 201 com saldo 1000.00, BET HTTP 200 com saldo 975.00, versão 2 e reconciliação consistent true/difference 0.00/checkedEntries 2. O banco dessa demonstração foi removido no finally.
+
+A instalação inicial encontrou EPERM no cache do Bun e foi concluída com execução autorizada fora do sandbox. Docker e os testes completos com subprocessos de migrations também utilizaram execução autorizada. Foram corrigidos erros de tipagem e avisos de lint nos novos testes durante o desenvolvimento. As execuções finais não apresentaram falha intermitente, erro ou warning de lint. Não houve alteração de schema ou migration nesta etapa. Não há endpoint obrigatório pendente na seção 9.

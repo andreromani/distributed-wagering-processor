@@ -1,3 +1,11 @@
+import { DataSource } from 'typeorm';
+import { TypeOrmWalletReconciliationReader } from './database/repositories/typeorm-wallet-reconciliation.reader.js';
+import { FinancialDiagnostics } from './http/financial-diagnostics.js';
+import { ReconcileWalletUseCase } from '../application/use-cases/reconcile-wallet.use-case.js';
+import { GetWalletUseCase } from '../application/use-cases/get-wallet.use-case.js';
+import { GetWagerTransactionUseCase } from '../application/use-cases/get-wager-transaction.use-case.js';
+import { GetProviderWagerTransactionUseCase } from '../application/use-cases/get-provider-wager-transaction.use-case.js';
+import { ListWalletLedgerUseCase } from '../application/use-cases/list-wallet-ledger.use-case.js';
 import { Module } from '@nestjs/common';
 import { DatabaseModule } from './database/database.module.js';
 import { TypeOrmFinancialTransaction } from './database/repositories/typeorm-financial-transaction.js';
@@ -8,6 +16,35 @@ import { ReprocessPendingReferenceUseCase } from '../application/use-cases/repro
 @Module({
   imports: [DatabaseModule],
   providers: [
+    {
+      provide: FinancialDiagnostics,
+      useFactory: () => new FinancialDiagnostics(),
+    },
+    {
+      provide: TypeOrmWalletReconciliationReader,
+      inject: [DataSource],
+      useFactory: (source: DataSource) =>
+        new TypeOrmWalletReconciliationReader(source),
+    },
+    {
+      provide: ReconcileWalletUseCase,
+      inject: [TypeOrmWalletReconciliationReader, FinancialDiagnostics],
+      useFactory: (
+        reader: TypeOrmWalletReconciliationReader,
+        observer: FinancialDiagnostics,
+      ) => new ReconcileWalletUseCase(reader, observer),
+    },
+    ...[
+      GetWalletUseCase,
+      GetWagerTransactionUseCase,
+      GetProviderWagerTransactionUseCase,
+      ListWalletLedgerUseCase,
+    ].map((token) => ({
+      provide: token,
+      inject: [TypeOrmFinancialTransaction],
+      useFactory: (transaction: TypeOrmFinancialTransaction) =>
+        new token(transaction),
+    })),
     {
       provide: OpenWalletUseCase,
       inject: [TypeOrmFinancialTransaction],
@@ -28,6 +65,12 @@ import { ReprocessPendingReferenceUseCase } from '../application/use-cases/repro
     },
   ],
   exports: [
+    FinancialDiagnostics,
+    ReconcileWalletUseCase,
+    GetWalletUseCase,
+    GetWagerTransactionUseCase,
+    GetProviderWagerTransactionUseCase,
+    ListWalletLedgerUseCase,
     OpenWalletUseCase,
     ProcessWagerTransactionUseCase,
     ReprocessPendingReferenceUseCase,

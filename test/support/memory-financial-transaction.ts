@@ -70,6 +70,14 @@ export class MemoryFinancialTransaction implements FinancialTransaction {
       },
     },
     ledger: {
+      findPage: async (walletId, limit) =>
+        this.entries
+          .filter((entry) => entry.walletId === walletId)
+          .slice(0, limit)
+          .map((entry) => ({
+            entry,
+            position: entry.createdAt.toISOString().replace('Z', '000Z'),
+          })),
       insert: async (entry) => {
         this.entries.push(entry);
       },
