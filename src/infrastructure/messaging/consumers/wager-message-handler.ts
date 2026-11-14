@@ -32,6 +32,7 @@ export class WagerMessageHandler {
     signal: AbortSignal,
     settled: () => Promise<void> = async () => {},
   ): Promise<HandlingResult> {
+    const started = performance.now();
     const fields: Record<string, unknown> = {
       consumerName: WAGER_CONSUMER_NAME,
       sqsMessageId: delivery.sqsMessageId,
@@ -101,6 +102,7 @@ export class WagerMessageHandler {
         );
       }
       this.diagnostics.event('financial_result', fields);
+      this.diagnostics.processing(result);
       if (result.status === Status.Failed) {
         await this.queue.deadLetter(delivery, 'TERMINAL_FAILED', messageId);
         this.diagnostics.increment('dlq');
@@ -151,6 +153,8 @@ export class WagerMessageHandler {
         this.diagnostics.event('message_attempts_exhausted', fields);
       }
       return this.retry(delivery, delay, fields);
+    } finally {
+      this.diagnostics.duration((performance.now() - started) / 1000);
     }
   }
 

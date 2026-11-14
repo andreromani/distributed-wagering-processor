@@ -14,6 +14,7 @@ export function databaseOptions(): Extract<
     entities: financialEntities,
     migrations: [import.meta.dirname + '/migrations/**/*.js'],
     poolSize: 3,
+    applicationName: environment().instanceId,
     connectTimeoutMS: 2000,
     extra: {
       statement_timeout: 2000,

@@ -14,14 +14,15 @@ Ao alterar LOCALSTACK_PORT, ajuste também SQS_ENDPOINT.
 
     bun install
     docker compose config --quiet
-    docker compose up -d
+    docker compose up -d postgres localstack
     docker compose ps
     docker compose logs localstack
     docker compose exec localstack awslocal sqs list-queues
     docker compose stop
 
-Compose sobe somente PostgreSQL e LocalStack. O volume postgres-data preserva dados.
+O comando acima sobe somente PostgreSQL e LocalStack para desenvolvimento e testes no host. O Compose completo inclui migrations e três aplicações. O volume postgres-data preserva dados.
 LocalStack recria filas ao iniciar; o healthcheck só aprova após o hook de provisionamento.
+O healthcheck usa HTTP leve e valida o estado do SQS. init recolhe processos filhos do container.
 Para repetir o hook: docker compose exec localstack sh /etc/localstack/init/ready.d/init-queues.sh
 
 ## Aplicação
@@ -33,7 +34,7 @@ Produção: bun run start:prod. Desenvolvimento em dois terminais:
 bun run build:watch e bun run start:dev.
 
 GET /health e /health/live: 200, processo vivo.
-GET /health/ready: verifica SELECT 1 e acesso às duas filas FIFO; 200 ou 503 sem detalhes internos.
+GET /health/ready verifica SELECT 1, entrada e DLQ FIFO e também a fila de eventos quando o publisher está habilitado. Retorna 200 ou 503 sem detalhes internos.
 A aplicação inicia sem conectar ao banco: primeira readiness inicializa a conexão.
 Falhas temporárias não impedem liveness e novas chamadas de readiness podem recuperar a conexão.
 
@@ -360,3 +361,74 @@ bun test test/integration/pending-reference-worker.test.ts
 ```
 
 Os testes de integração usam banco temporário exclusivo, relógio controlado e verificam saldo, ledger e outbox. Dois workers concorrentes no mesmo processo verificam a arbitragem SQL. A validação final com três processos independentes permanece para a etapa distribuída.
+
+## Ambiente distribuído — Etapa 11
+
+O Dockerfile usa oven/bun:1.4.4 em múltiplos estágios, instalação frozen, compilação tsc e dependências de produção. A imagem final executa dist/main.js com Bun e usuário bun. A mesma imagem atende migrations e app-1, app-2 e app-3. O PostgreSQL saudável e o hook de filas do LocalStack precedem migrations. As aplicações dependem da conclusão bem-sucedida desse serviço único.
+
+Após clonar, copie .env.example para .env e execute em PowerShell.
+
+```powershell
+bun install --frozen-lockfile
+docker compose config --quiet
+docker compose build
+docker compose up -d --wait
+docker compose ps -a
+```
+
+As três aplicações habilitam HTTP, consumer, publisher e referências pendentes explicitamente. INSTANCE_ID assume app-1, app-2 e app-3, preservando consumerName e identidades persistentes. Fora do Compose, INSTANCE_ID é opcional, com valor gerado uma vez por processo e limite de 128 caracteres de letras, números, ponto, sublinhado, dois-pontos e hífen. O header x-instance-id identifica a aplicação que respondeu.
+
+| Instância | API | Liveness | Readiness | Métricas |
+| --- | --- | --- | --- | --- |
+| app-1 | http://localhost:3001 | /health/live | /health/ready | /metrics |
+| app-2 | http://localhost:3002 | /health/live | /health/ready | /metrics |
+| app-3 | http://localhost:3003 | /health/live | /health/ready | /metrics |
+
+Dentro dos containers, PostgreSQL usa postgres:5432 e SQS usa localstack:4566. SQS_ENDPOINT_STRATEGY=dynamic permite ao LocalStack retornar URLs usando o host da requisição, atendendo containers e host. O volume PostgreSQL existente é preservado. As filas LocalStack continuam seguindo a política de desenvolvimento anterior, com recriação pelo hook quando o serviço reinicia. Reiniciar somente as aplicações preserva filas e banco.
+
+Para executar migrations com a imagem pronta, sem compilador TypeScript na imagem final, use o serviço migrations.
+O DataSource exclusivo do CLI usa conexão de 10s, statement timeout de 60s e query timeout de 65s para catálogo e DDL. Os limites curtos das operações financeiras permanecem na configuração da aplicação.
+
+```powershell
+docker compose run --rm migrations
+docker compose run --rm migrations bun ./node_modules/typeorm/cli.js migration:show -d ./dist/infrastructure/database/data-source.js
+```
+
+Para o smoke distribuído, mantenha as três instâncias prontas e execute a ferramenta Bun no host. Ela usa as credenciais locais e portas de .env para consultar evidências no PostgreSQL e SQS.
+
+```powershell
+bun scripts/distributed-smoke.ts
+bun scripts/distributed-shutdown.ts
+Invoke-RestMethod http://localhost:3001/health/ready
+(Invoke-WebRequest -UseBasicParsing http://localhost:3001/metrics).Content
+docker compose logs --tail 50 app-1 app-2 app-3
+docker compose stop app-1
+docker compose start app-1
+```
+
+O smoke cria identificadores únicos e mantém os dados financeiros. Verifica wallet compartilhada, BET e replay entre instâncias, WIN via SQS, saldo 85.00, três lançamentos, reconciliação, seis eventos publicados e métricas das três APIs. Para conferir os envelopes publicados, lê a fila de eventos, mantém visibilidade temporária e a devolve no finally, preservando as mensagens. A inspeção incrementa contadores de recebimento dessa fila. SMOKE_APP_URLS permite informar três URLs distintas na ordem app-1, app-2 e app-3. O smoke não cobre a suíte distribuída de concorrência e crash da próxima etapa.
+
+stop_grace_period é 40s para o orçamento de workers de 30s. Logs signal_received, consumer_stopped, outbox_publisher_stopped, pending_reference_worker_stopped, workers_drained e sqs_client_destroyed permitem acompanhar SIGTERM nativo e a ordem de encerramento. O teste cooperativo de stop/start é independente da validação futura de crash abrupto.
+
+distributed-shutdown.ts usa as portas padrão 3001–3003 e chama Docker Compose pelo Bun. Ele pausa app-2/app-3, cria uma wallet exclusiva, mantém um lock SQL enquanto app-1 recebe LOSS e executa docker compose stop app-1. Após observar SIGTERM, libera o lock e verifica drenagem, fechamento de conexões e ACK condicionado a inbox confirmada. Reinicia as três aplicações e confere recuperação, ledger e reconciliação. Os dados de teste são preservados e as aplicações são reiniciadas também no finally.
+O probe identifica o bloqueador SQL da conexão de teste. A sincronização considera visibilidade e long polling, limitada a 120s. A espera de readiness após restart é limitada a 180s, acompanhando a janela de startup do Compose. Esses prazos de validação são separados do orçamento de shutdown de 30s dos workers e da tolerância de 40s do Compose.
+
+Para reduzir consumo durante a suíte local, pare as aplicações e mantenha a infraestrutura.
+
+```powershell
+docker compose stop app-1 app-2 app-3
+docker compose up -d postgres localstack
+bun run build
+bun run typecheck
+bun run lint
+bun run test:unit
+bun run test:integration
+bun test
+docker compose start app-1 app-2 app-3
+```
+
+GET /metrics fornece Prometheus text 0.0.4. Contadores são locais à instância e reiniciam com o processo. Os resultados financeiros usam source, status e replay, contabilizando observações do processamento, inclusive resultados reproduzidos. O histograma wager_processing_duration_seconds mede HTTP sem health/metrics, entregas SQS e tentativas de referência com buckets cumulativos em segundos.
+
+As famílias incluem wager_transactions_total, wager_replays_total, wager_identity_conflicts_total, wager_http_requests_total, wager_sql_lock_conflicts_total, wager_sql_transient_failures_total, wager_reconciliation_divergences_total, contadores wager_sqs_*, wager_outbox_* e wager_reference_*. Conflitos SQL contabilizam 40001, 40P01 e 55P03 observados pelo adaptador financeiro. Falhas transitórias SQL são contabilizadas por tentativa desfeita. Os retries de entrega e publicação possuem contadores próprios.
+
+Gauges consultam PostgreSQL e SQS durante o scrape, incluindo wager_outbox_pending_events, wager_outbox_oldest_pending_age_seconds, wager_reference_pending_transactions e wager_sqs_dlq_messages. Esses valores representam recursos compartilhados e aparecem com scope=shared, devendo ser deduplicados ao consultar várias instâncias. Os flags wager_metrics_database_collection_success e wager_metrics_sqs_collection_success indicam o sucesso da coleta daquela instância. Em falha, os últimos gauges conhecidos são preservados e os contadores continuam disponíveis com HTTP 200. Nenhum identificador financeiro é label. A consolidação pode ser feita futuramente por um coletor Prometheus externo.

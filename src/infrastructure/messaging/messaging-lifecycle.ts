@@ -1,11 +1,17 @@
-import type { OnApplicationBootstrap, OnModuleDestroy } from '@nestjs/common';
+import type {
+  OnApplicationBootstrap,
+  OnModuleDestroy,
+  BeforeApplicationShutdown,
+} from '@nestjs/common';
+import type { DataSource } from 'typeorm';
+import type { MessagingDiagnostics } from './messaging-diagnostics.js';
 import { WagerTransactionConsumer } from './consumers/wager-transaction.consumer.js';
 import { OutboxPublisher } from './publishers/outbox.publisher.js';
 import type { WorkerOptions } from '../config/worker-options.js';
 import type { PendingReferenceWorker } from './consumers/pending-reference.worker.js';
 
 export class MessagingLifecycle
-  implements OnApplicationBootstrap, OnModuleDestroy
+  implements OnApplicationBootstrap, OnModuleDestroy, BeforeApplicationShutdown
 {
   constructor(
     private readonly consumer: WagerTransactionConsumer,
@@ -15,6 +21,8 @@ export class MessagingLifecycle
       PendingReferenceWorker,
       'start' | 'stop'
     >,
+    private readonly diagnostics?: MessagingDiagnostics,
+    private readonly source?: DataSource,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -43,5 +51,12 @@ export class MessagingLifecycle
       stopping.push(this.pendingReference.stop());
     }
     await Promise.all(stopping);
+  }
+
+  beforeApplicationShutdown(signal?: string): void {
+    this.diagnostics?.event('workers_drained', {
+      signal,
+      databaseConnected: this.source?.isInitialized,
+    });
   }
 }

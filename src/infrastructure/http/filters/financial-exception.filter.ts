@@ -109,7 +109,7 @@ export class FinancialExceptionFilter implements ExceptionFilter {
     const correlationId = String(
       response.getHeader('x-correlation-id') ?? crypto.randomUUID(),
     );
-    if (mapped.statusCode >= 500) {
+    if (mapped.statusCode >= 500 || mapped.statusCode === 409) {
       this.diagnostics.record({
         level: 'error',
         event: 'http_request_failed',

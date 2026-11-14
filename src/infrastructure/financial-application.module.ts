@@ -12,13 +12,17 @@ import { TypeOrmFinancialTransaction } from './database/repositories/typeorm-fin
 import { OpenWalletUseCase } from '../application/use-cases/open-wallet.use-case.js';
 import { ProcessWagerTransactionUseCase } from '../application/use-cases/process-wager-transaction.use-case.js';
 import { ReprocessPendingReferenceUseCase } from '../application/use-cases/reprocess-pending-reference.use-case.js';
+import { ObservabilityModule } from './observability/observability.module.js';
+import { OperationalMetrics } from './observability/operational-metrics.js';
 
 @Module({
-  imports: [DatabaseModule],
+  imports: [DatabaseModule, ObservabilityModule],
   providers: [
     {
       provide: FinancialDiagnostics,
-      useFactory: () => new FinancialDiagnostics(),
+      inject: [OperationalMetrics],
+      useFactory: (metrics: OperationalMetrics) =>
+        new FinancialDiagnostics(undefined, metrics),
     },
     {
       provide: TypeOrmWalletReconciliationReader,

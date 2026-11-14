@@ -15,7 +15,8 @@ export class TypeOrmPendingReferenceReader implements PendingReferenceReader {
   ): Promise<PendingReferenceCandidate[]> {
     await ensureDatabaseConnection(this.source);
     return this.source.query<PendingReferenceCandidate[]>(
-      `SELECT id AS "transactionId", reference_attempts AS "referenceAttempts"
+      `SELECT id AS "transactionId", reference_attempts AS "referenceAttempts",
+         wallet_id AS "walletId", provider_id AS "providerId"
        FROM wager_transactions
        WHERE status = 'PENDING_REFERENCE'
          AND (next_attempt_at IS NULL OR next_attempt_at <= $1 OR created_at <= $2)

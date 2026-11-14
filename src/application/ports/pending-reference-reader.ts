@@ -1,6 +1,8 @@
 export interface PendingReferenceCandidate {
   transactionId: string;
   referenceAttempts: number;
+  walletId?: string;
+  providerId?: string;
 }
 
 export interface PendingReferenceReader {

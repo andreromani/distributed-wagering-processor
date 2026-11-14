@@ -100,8 +100,11 @@ export class PendingReferenceWorker {
       const fields = {
         transactionId: candidate.transactionId,
         correlationId: candidate.transactionId,
+        walletId: candidate.walletId,
+        providerId: candidate.providerId,
         attempt: candidate.referenceAttempts + 1,
       };
+      const started = performance.now();
       try {
         const result = await transactionCancellation.run(signal, () =>
           this.reprocess.execute(candidate.transactionId, {
@@ -125,6 +128,7 @@ export class PendingReferenceWorker {
               ? 'pendingReferenceRescheduled'
               : 'pendingReferenceRejected';
         this.diagnostics.increment(metric);
+        this.diagnostics.processing(result, 'reference');
         this.diagnostics.event('pending_reference_' + outcome, {
           ...fields,
           status: result.status,
@@ -141,6 +145,11 @@ export class PendingReferenceWorker {
           ...fields,
           failureCode: classifyMessageError(error).code,
         });
+      } finally {
+        this.diagnostics.duration(
+          (performance.now() - started) / 1000,
+          'reference',
+        );
       }
     }
     return processed;

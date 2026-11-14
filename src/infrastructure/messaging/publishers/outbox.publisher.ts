@@ -72,6 +72,8 @@ export class OutboxPublisher {
       const found = await this.store.processNext(
         this.now(),
         async (message) => {
+          const data = message.payload.data;
+          const identifiers = data && typeof data === 'object' ? data : {};
           const fields = {
             eventId: message.id,
             eventType: message.eventType,
@@ -79,6 +81,16 @@ export class OutboxPublisher {
             correlationId: message.payload.correlationId,
             causationId: message.payload.causationId,
             attempt: message.attempts + 1,
+            transactionId:
+              'transactionId' in identifiers &&
+              typeof identifiers.transactionId === 'string'
+                ? identifiers.transactionId
+                : undefined,
+            providerId:
+              'providerId' in identifiers &&
+              typeof identifiers.providerId === 'string'
+                ? identifiers.providerId
+                : undefined,
           };
           try {
             await this.publisher.publish(message, signal);

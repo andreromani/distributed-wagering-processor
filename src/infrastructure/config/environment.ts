@@ -1,4 +1,5 @@
 import { workerOptions } from './worker-options.js';
+import { instanceId } from './instance-id.js';
 export function environment(env: NodeJS.ProcessEnv = process.env) {
   const get = (name: string): string => {
     const value = env[name];
@@ -25,6 +26,7 @@ export function environment(env: NodeJS.ProcessEnv = process.env) {
   }
 
   return {
+    instanceId: instanceId(env),
     workers: workerOptions(env),
     port: port('PORT'),
     database: {

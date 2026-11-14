@@ -16,9 +16,16 @@ import { MessagingLifecycle } from './messaging-lifecycle.js';
 import { PendingReferenceWorker } from './consumers/pending-reference.worker.js';
 import { TypeOrmPendingReferenceReader } from '../database/repositories/typeorm-pending-reference.reader.js';
 import { ReprocessPendingReferenceUseCase } from '../../application/use-cases/reprocess-pending-reference.use-case.js';
+import { ObservabilityModule } from '../observability/observability.module.js';
+import { OperationalMetrics } from '../observability/operational-metrics.js';
 
 @Module({
-  imports: [FinancialApplicationModule, DatabaseModule, SqsModule],
+  imports: [
+    FinancialApplicationModule,
+    DatabaseModule,
+    SqsModule,
+    ObservabilityModule,
+  ],
   providers: [
     {
       provide: TypeOrmPendingReferenceReader,
@@ -47,7 +54,9 @@ import { ReprocessPendingReferenceUseCase } from '../../application/use-cases/re
     },
     {
       provide: MessagingDiagnostics,
-      useFactory: () => new MessagingDiagnostics(),
+      inject: [OperationalMetrics],
+      useFactory: (metrics: OperationalMetrics) =>
+        new MessagingDiagnostics(undefined, metrics),
     },
     {
       provide: SqsTransport,
@@ -116,11 +125,15 @@ import { ReprocessPendingReferenceUseCase } from '../../application/use-cases/re
         WagerTransactionConsumer,
         OutboxPublisher,
         PendingReferenceWorker,
+        MessagingDiagnostics,
+        DataSource,
       ],
       useFactory: (
         consumer: WagerTransactionConsumer,
         publisher: OutboxPublisher,
         pendingReference: PendingReferenceWorker,
+        diagnostics: MessagingDiagnostics,
+        source: DataSource,
       ) => {
         const options = environment().workers;
         const lifecycleOptions =
@@ -137,6 +150,8 @@ import { ReprocessPendingReferenceUseCase } from '../../application/use-cases/re
           publisher,
           lifecycleOptions,
           pendingReference,
+          diagnostics,
+          source,
         );
       },
     },

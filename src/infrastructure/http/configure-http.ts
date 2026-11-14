@@ -3,11 +3,21 @@ import type { Request, Response, NextFunction } from 'express';
 import { requestHeader } from './headers.js';
 import { FinancialDiagnostics } from './financial-diagnostics.js';
 import { FinancialExceptionFilter } from './filters/financial-exception.filter.js';
+import { instanceId } from '../config/instance-id.js';
 
 export function configureHttp(app: INestApplication): void {
   const filter = new FinancialExceptionFilter(app.get(FinancialDiagnostics));
   app.useGlobalFilters(filter);
   app.use((request: Request, response: Response, next: NextFunction) => {
+    const started = performance.now();
+    response.setHeader('x-instance-id', instanceId());
+    response.once('finish', () => {
+      if (!/^\/(health|metrics)(?:\/|$)/.test(request.path)) {
+        const diagnostics = app.get(FinancialDiagnostics);
+        diagnostics.httpFinished(response.statusCode);
+        diagnostics.duration((performance.now() - started) / 1000);
+      }
+    });
     const generated = crypto.randomUUID();
     response.setHeader('x-correlation-id', generated);
     try {

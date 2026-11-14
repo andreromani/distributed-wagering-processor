@@ -10,6 +10,7 @@ import {
   ParseUUIDPipe,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
+import { FinancialDiagnostics } from '../financial-diagnostics.js';
 import { ProcessWagerTransactionUseCase } from '../../../application/use-cases/process-wager-transaction.use-case.js';
 import { GetWagerTransactionUseCase } from '../../../application/use-cases/get-wager-transaction.use-case.js';
 import { ProcessWagerTransactionDto } from '../dtos/process-wager-transaction.dto.js';
@@ -28,6 +29,8 @@ export class WageringTransactionsController {
     private readonly process: ProcessWagerTransactionUseCase,
     @Inject(GetWagerTransactionUseCase)
     private readonly get: GetWagerTransactionUseCase,
+    @Inject(FinancialDiagnostics)
+    private readonly diagnostics: FinancialDiagnostics,
   ) {}
 
   @Post()
@@ -57,6 +60,11 @@ export class WageringTransactionsController {
       ),
     });
     response.status(processingStatus(result.status));
+    this.diagnostics.processing(result, {
+      providerId: body.providerId,
+      walletId: body.walletId,
+      correlationId: String(response.getHeader('x-correlation-id')),
+    });
     return processingResponse(result);
   }
 

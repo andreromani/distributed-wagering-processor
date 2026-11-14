@@ -12,9 +12,14 @@ import { TypeOrmWagerTransactionRepository } from './typeorm-wager-transaction.r
 import { TypeOrmLedgerRepository } from './typeorm-wallet-ledger.repository.js';
 import { TypeOrmInboxRepository } from './typeorm-inbox.repository.js';
 import { TypeOrmOutboxRepository } from './typeorm-outbox.repository.js';
+import type { OperationalMetrics } from '../../observability/operational-metrics.js';
+import { PersistenceError } from '../../../application/ports/persistence.error.js';
 
 export class TypeOrmFinancialTransaction implements FinancialTransaction {
-  constructor(private readonly source: DataSource) {}
+  constructor(
+    private readonly source: DataSource,
+    private readonly metrics?: OperationalMetrics,
+  ) {}
 
   async run<T>(work: (context: FinancialContext) => Promise<T>): Promise<T> {
     try {
@@ -39,7 +44,12 @@ export class TypeOrmFinancialTransaction implements FinancialTransaction {
         },
       );
     } catch (error) {
-      throw persistenceError(error);
+      const mapped = persistenceError(error);
+      this.metrics?.sqlFailure(
+        error,
+        mapped instanceof PersistenceError && mapped.category === 'transient',
+      );
+      throw mapped;
     }
   }
 }
