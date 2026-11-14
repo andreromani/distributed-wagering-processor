@@ -18,6 +18,12 @@ import type { OpenWalletResult } from '../../src/application/use-cases/open-wall
 import type { ProcessWagerResult } from '../../src/application/use-cases/process-wager-transaction.use-case.js';
 import type { ReconciliationResult } from '../../src/application/use-cases/reconcile-wallet.use-case.js';
 import { decodeLedgerCursor } from '../../src/application/services/ledger-cursor.js';
+import { GUARDS_METADATA } from '@nestjs/common/constants';
+import { FinancialAuthGuard } from '../../src/infrastructure/http/financial-auth.guard.js';
+import { WalletsController } from '../../src/infrastructure/http/controllers/wallets.controller.js';
+import { WageringTransactionsController } from '../../src/infrastructure/http/controllers/wagering-transactions.controller.js';
+import { ProviderWageringTransactionsController } from '../../src/infrastructure/http/controllers/provider-wagering-transactions.controller.js';
+import { HealthController } from '../../src/infrastructure/http/health.controller.js';
 
 const database = 'wager_http_' + crypto.randomUUID().replaceAll('-', '');
 const admin = new DataSource({
@@ -691,4 +697,168 @@ test('HTTP persisted FAILED replays as a terminal 500 result and remains queryab
   expect(query.body.status).toBe('FAILED');
   expect(await counts(w.id)).toEqual(before);
   await reconcile(w.id);
+});
+
+test('no-op auth guard preserves unauthenticated financial HTTP and leaves health unguarded', async () => {
+  for (const controller of [
+    WalletsController,
+    WageringTransactionsController,
+    ProviderWageringTransactionsController,
+  ]) {
+    expect(Reflect.getMetadata(GUARDS_METADATA, controller)).toContain(
+      FinancialAuthGuard,
+    );
+  }
+
+  expect(
+    Reflect.getMetadata(GUARDS_METADATA, HealthController),
+  ).toBeUndefined();
+  expect(new FinancialAuthGuard().canActivate()).toBe(true);
+  const w = await wallet('100.00');
+  const input = payload(w);
+  const result = await submit(input);
+
+  expect(result.response.status).toBe(200);
+  expect(result.body.balance?.amount).toBe('75.00');
+  expect((await request('/wallets/' + w.id)).response.status).toBe(200);
+  expect(
+    (
+      await request(
+        '/providers/provider-a/wagering/transactions/' +
+          input.externalTransactionId,
+      )
+    ).response.status,
+  ).toBe(200);
+  expect((await request('/health/live')).response.status).toBe(200);
+  await reconcile(w.id);
+});
+
+test('HTTP conflict logs validated identity and the original operation ID without financial payloads', async () => {
+  const w = await wallet('100.00');
+  const input = payload(w);
+  const original = await submit(input);
+  const correlationId = crypto.randomUUID();
+  const result = await request(
+    '/wagering/transactions',
+    'POST',
+    { ...input, money: { amount: '10.00', currency: 'BRL' } },
+    {
+      'Idempotency-Key': input.externalTransactionId,
+      'x-correlation-id': correlationId,
+      authorization: 'Bearer SECRET_TOKEN',
+    },
+  );
+  const record = records.find(
+    (entry) =>
+      entry.event === 'http_request_failed' &&
+      entry.correlationId === correlationId,
+  );
+
+  expect(result.response.status).toBe(409);
+  expect(record).toMatchObject({
+    providerId: input.providerId,
+    walletId: w.id,
+    operationId: original.body.transactionId,
+    correlationId,
+    code: 'IDEMPOTENCY_CONFLICT',
+  });
+  expect(record?.instanceId).toBeString();
+  expect(record).not.toHaveProperty('transactionId');
+  expect(JSON.stringify(record)).not.toMatch(
+    /amount|money|SECRET_TOKEN|authorization|stack|SQL/,
+  );
+  expect(result.body).not.toHaveProperty('operationId');
+  await reconcile(w.id);
+});
+
+test('HTTP transient error logs only validated request IDs and does not invent a transaction ID', async () => {
+  const w = await wallet('100.00');
+  const input = payload(w);
+  const correlationId = crypto.randomUUID();
+  failure = 'transient';
+  try {
+    const result = await request('/wagering/transactions', 'POST', input, {
+      'Idempotency-Key': input.externalTransactionId,
+      'x-correlation-id': correlationId,
+    });
+    const record = records.find(
+      (entry) =>
+        entry.event === 'http_request_failed' &&
+        entry.correlationId === correlationId,
+    );
+
+    expect(result.response.status).toBe(503);
+    expect(record).toMatchObject({
+      providerId: input.providerId,
+      walletId: w.id,
+      correlationId,
+    });
+    expect(record).not.toHaveProperty('transactionId');
+    expect(record?.operationId).toBeString();
+    expect(
+      await source.query('SELECT id FROM wager_transactions WHERE id=$1', [
+        record?.operationId,
+      ]),
+    ).toHaveLength(0);
+  } finally {
+    failure = undefined;
+  }
+
+  await reconcile(w.id);
+});
+
+test('HTTP invalid payload does not promote even well-formed supplied IDs to trusted log context', async () => {
+  const correlationId = crypto.randomUUID();
+  const result = await request(
+    '/wagering/transactions',
+    'POST',
+    {
+      providerId: 'untrusted-provider',
+      walletId: crypto.randomUUID(),
+      transactionId: crypto.randomUUID(),
+      money: { amount: 25, currency: 'BRL' },
+      password: 'SECRET_INVALID',
+    },
+    { 'x-correlation-id': correlationId },
+  );
+  const record = records.find(
+    (entry) =>
+      entry.event === 'http_request_failed' &&
+      entry.correlationId === correlationId,
+  );
+
+  expect(result.response.status).toBe(400);
+  expect(record).toMatchObject({ correlationId, code: 'INVALID_INPUT' });
+  for (const name of [
+    'providerId',
+    'walletId',
+    'transactionId',
+    'operationId',
+  ]) {
+    expect(record).not.toHaveProperty(name);
+  }
+
+  expect(JSON.stringify(record)).not.toMatch(
+    /untrusted-provider|SECRET_INVALID|amount|password/,
+  );
+});
+
+test('HTTP transaction query logs its validated transaction ID on failure', async () => {
+  const transactionId = crypto.randomUUID();
+  const correlationId = crypto.randomUUID();
+  const result = await request(
+    '/wagering/transactions/' + transactionId,
+    'GET',
+    undefined,
+    { 'x-correlation-id': correlationId },
+  );
+  const record = records.find(
+    (entry) =>
+      entry.event === 'http_request_failed' &&
+      entry.correlationId === correlationId,
+  );
+
+  expect(result.response.status).toBe(404);
+  expect(record).toMatchObject({ transactionId, correlationId });
+  expect(record).not.toHaveProperty('operationId');
 });

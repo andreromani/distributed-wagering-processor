@@ -1,5 +1,7 @@
 import {
   Controller,
+  UseGuards,
+  Res,
   Get,
   Param,
   Inject,
@@ -7,8 +9,12 @@ import {
 } from '@nestjs/common';
 import { GetProviderWagerTransactionUseCase } from '../../../application/use-cases/get-provider-wager-transaction.use-case.js';
 import { wagerResponse } from '../mappers/wager-transaction-response.mapper.js';
+import type { Response } from 'express';
+import { FinancialAuthGuard } from '../financial-auth.guard.js';
+import { setFinancialErrorContext } from '../financial-error-context.js';
 
 @Controller('providers')
+@UseGuards(FinancialAuthGuard)
 export class ProviderWageringTransactionsController {
   constructor(
     @Inject(GetProviderWagerTransactionUseCase)
@@ -19,6 +25,7 @@ export class ProviderWageringTransactionsController {
   async find(
     @Param('providerId') providerId: string,
     @Param('externalTransactionId') externalId: string,
+    @Res({ passthrough: true }) response: Response,
   ): Promise<ReturnType<typeof wagerResponse>> {
     if (
       [providerId, externalId].some(
@@ -30,6 +37,7 @@ export class ProviderWageringTransactionsController {
     ) {
       throw new BadRequestException();
     }
+    setFinancialErrorContext(response, { providerId });
     return wagerResponse(await this.get.execute(providerId, externalId));
   }
 }

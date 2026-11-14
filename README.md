@@ -1,129 +1,70 @@
-﻿# Distributed Wagering Processor
+# Distributed Wagering Processor
 
-Pré-requisitos: Bun 1.x (1.4.4 validado), Docker Desktop com containers Linux e Docker Compose.
+Serviço NestJS/Bun com PostgreSQL, TypeORM e SQS FIFO via LocalStack. HTTP e SQS compartilham o núcleo financeiro, com ledger, inbox e transactional outbox.
 
-## Ambiente local
+## Início rápido
 
-Copie .env.example para .env (PowerShell: Copy-Item .env.example .env).
-Use somente credenciais fictícias localmente. .env não é versionado.
+Pré-requisitos: Bun 1.x (1.4.4 validado), Docker com containers Linux e Docker Compose. Em PowerShell, a partir da raiz do clone:
 
-Variáveis: PORT; POSTGRES_HOST, POSTGRES_PORT, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD;
-LOCALSTACK_PORT; SQS_ENDPOINT; AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY;
-SQS_QUEUE_NAME, SQS_DLQ_NAME, SQS_MAX_RECEIVE_COUNT, SQS_VISIBILITY_TIMEOUT.
-Ao alterar LOCALSTACK_PORT, ajuste também SQS_ENDPOINT.
+```powershell
+Copy-Item .env.example .env
+bun install --frozen-lockfile
+docker compose config --quiet
+docker compose build
+docker compose up -d --wait
+docker compose ps -a
+Invoke-RestMethod http://localhost:3001/health/ready
+```
 
-    bun install
-    docker compose config --quiet
-    docker compose up -d postgres localstack
-    docker compose ps
-    docker compose logs localstack
-    docker compose exec localstack awslocal sqs list-queues
-    docker compose stop
+Use apenas credenciais fictícias localmente. .env não é versionado. No shell Linux, use `cp .env.example .env`; os demais comandos Bun/Docker são iguais. O hook init-queues.sh é versionado com modo 100755 e LF; ele cria idempotentemente entrada, DLQ, eventos e o marcador de readiness. O healthcheck.sh também usa LF, mas é invocado por `sh` e não requer bit executável.
 
-O comando acima sobe somente PostgreSQL e LocalStack para desenvolvimento e testes no host. O Compose completo inclui migrations e três aplicações. O volume postgres-data preserva dados.
-LocalStack recria filas ao iniciar; o healthcheck só aprova após o hook de provisionamento.
-O healthcheck usa HTTP leve e valida o estado do SQS. init recolhe processos filhos do container.
-Para repetir o hook: docker compose exec localstack sh /etc/localstack/init/ready.d/init-queues.sh
+O Compose aguarda PostgreSQL/LocalStack saudáveis, executa migrations uma vez e inicia três aplicações da mesma imagem. APIs: http://localhost:3001, :3002 e :3003. Os quatro componentes (HTTP, consumer, publisher e referências) estão habilitados. Health: /health/live e /health/ready; métricas: /metrics. Use a porta 3001 nos exemplos HTTP/SQS abaixo quando executar pelo Compose.
 
-## Aplicação
+O volume postgres-data preserva dados. As filas de desenvolvimento do LocalStack são voláteis em recriação do serviço; reiniciar apenas aplicações preserva banco e filas. A causa dos timeouts históricos intermitentes de SQS/readiness permanece inconclusiva; resultados aprovados posteriores não comprovam sua resolução causal.
 
-    bun run build
-    bun run start
+## Validar e executar no host
 
-Produção: bun run start:prod. Desenvolvimento em dois terminais:
-bun run build:watch e bun run start:dev.
+Execute as suítes locais separadamente das provas distribuídas. Integrações exigem PostgreSQL e LocalStack reais, build prévio e permissão CREATEDB para bancos temporários. Para reduzir disputa por recursos, pode parar somente as aplicações:
 
-GET /health e /health/live: 200, processo vivo.
-GET /health/ready verifica SELECT 1, entrada e DLQ FIFO e também a fila de eventos quando o publisher está habilitado. Retorna 200 ou 503 sem detalhes internos.
-A aplicação inicia sem conectar ao banco: primeira readiness inicializa a conexão.
-Falhas temporárias não impedem liveness e novas chamadas de readiness podem recuperar a conexão.
+```powershell
+docker compose stop app-1 app-2 app-3
+bun run build
+bun run typecheck
+bun run lint
+bun run test:unit
+bun run test:integration
+bun test
+docker compose start app-1 app-2 app-3
+```
 
-## Validação
+`bun test` inclui integração e falha se infraestrutura estiver indisponível. Os testes usam bancos/filas temporários e verificam PostgreSQL/SQS reais. Os 502 testes e nove cenários distribuídos da Etapa 12 são resultados históricos; os ajustes finais e sua validação direcionada são descritos em ARCHITECTURE.md.
 
-    bun run build
-    bun run typecheck
-    bun run lint
-    bun run test:unit
-    bun run test:integration
-    bun test
+Para desenvolvimento no host, mantenha `docker compose up -d postgres localstack`, aplique `bun run migration:run`, execute `bun run build` e `bun run start` (porta 3000 de .env). Desenvolvimento contínuo: `bun run build:watch` e `bun run start:dev` em terminais separados; produção: `bun run start:prod`. Não execute outra API na mesma porta.
 
-Unitários não precisam de Docker. Integração precisa de Compose saudável e build prévio.
-bun test inclui integração e falha explicitamente se dependências estiverem indisponíveis.
-Os cenários de falha usam endpoint isolado inválido; não param containers de outros testes.
-O teste de metadados usa o JavaScript compilado. Injeções de tokens em código-fonte são explícitas com @Inject, pois a transpilação direta do Bun não substitui emitDecoratorMetadata.
+## Migrations e persistência
 
-## Migrations
+```powershell
+bun run migration:show
+bun run migration:run
+# Somente no banco pretendido: desfaz a migration mais recente.
+bun run migration:revert
+```
 
-A migration FinancialFoundation1797000000000 cria o schema financeiro inicial.
+Os comandos compilam e usam o CLI TypeORM com Bun. Para criar nova migration: `bun run migration:generate ./src/infrastructure/database/migrations/Nome`; revise o SQL para preservar constraints/triggers. synchronize e migrationsRun são false. O Compose usa o CLI compilado pelo serviço migrations; veja os comandos de imagem adiante.
 
-    bun run migration:show
-    bun run migration:generate ./src/infrastructure/database/migrations/Nome
-    bun run migration:run
-    bun run migration:revert
+FinancialFoundation1797000000000 cria as cinco tabelas, constraints e triggers. RejectedSnapshots1797000001000 permite snapshots de rejeições para replay. O downgrade incremental remove esses snapshots, preservando saldo/ledger. Reverter a fundação remove tabelas e dados: não use como limpeza de testes. A reversibilidade run/revert/revert/run é testada em banco exclusivo.
 
-Os scripts compilam antes de chamar o CLI TypeORM com Bun e DataSource em dist.
-Após gerar uma migration TypeScript, o próximo build compila o arquivo antes de aplicar.
-Migrations devem implementar up/down reversíveis. Não há migrations automáticas na inicialização.
-A reversibilidade é testada pelo CLI em banco temporário isolado.
+Money usa NUMERIC(30,2) e strings, sem conversão para number; moeda fica separada. A validação de escala ocorre antes do SQL, que pode arredondar entradas diretas. TypeOrmFinancialTransaction compartilha EntityManager READ COMMITTED, lock individual por wallet e confirma saldo, wager, ledger, inbox e outbox atomicamente. Replay usa saldo/versão originais. Detalhes de concorrência, decisões de negócio, códigos e limitações estão em ARCHITECTURE.md.
 
-## Persistência financeira
+## Autenticação e diagnóstico
 
-A migration inicial cria wallets, wager_transactions, wallet_ledger_entries, inbox_messages e outbox_messages.
-Saldo e quantias usam NUMERIC(30,2), preservados como strings nos mappers. Money valida a escala antes da persistência, pois PostgreSQL arredonda entradas com escala excedente.
+Autenticação não foi implementada. FinancialAuthGuard é um guard no-op aplicado aos três controllers financeiros: sempre permite a requisição e não oferece segurança. Health permanece aberto. Para integrar um IdP OIDC externo, substitua esse provider por um guard que valide assinatura, issuer, audience e validade do token, e associe uma identidade confiável ao request. Aplique autorização do provider e das wallets ao recurso solicitado; formato válido de providerId/walletId não prova autorização. Guards executam antes dos pipes: valide entradas usadas na decisão ou delegue a autorização de recurso a uma etapa posterior à validação. Não crie usuários/senhas locais.
 
-Wallets têm unicidade por jogador/moeda e checks de saldo e versão.
-Transações têm unicidade por provider/external ID e idempotency key, snapshot de resultado original e agendamento de referências pendentes.
-Reversões PROCESSED têm unicidade parcial por referência/tipo.
-O ledger valida aritmética, contexto e imutabilidade por triggers, incluindo TRUNCATE.
-Inbox e outbox possuem schema e adaptadores preparatórios.
+Logs HTTP de erro incluem correlação, instância e identificadores capturados somente após validação dos DTOs/parâmetros. transactionId representa um parâmetro interno de consulta; operationId vem do erro da aplicação e pode identificar uma tentativa ainda não persistida. Não se infere transação confirmada desse campo. Payload inválido não fornece contexto confiável. Nenhum corpo financeiro, token, SQL ou stack bruto é registrado.
 
-O bloco TypeOrmFinancialTransaction.run compartilha um EntityManager READ COMMITTED entre os cinco repositórios.
-A consulta de wallet com lock exige transação ativa. Adquira locks por ID em ordem consistente e execute chamadas externas fora do bloco.
-O snapshot result_balance/result_version permite replay sem consultar o saldo atual.
-O namespace provider internal e as keys opening: são reservados para abertura.
+## API HTTP financeira
 
-Com infraestrutura saudável, execute
-
-    bun run build
-    bun run typecheck
-    bun run lint
-    bun run test:unit
-    bun run test:integration
-    bun test
-
-Os testes financeiros criam e removem um banco temporário exclusivo, com nome wager_test_<uuid>, usando as credenciais de desenvolvimento e exigindo permissão CREATEDB. Eles executam os scripts reais migration:run, migration:revert e migration:run com POSTGRES_DB direcionado ao banco temporário. O banco de desenvolvimento permanece preservado.
-
-Para aplicar a migration no banco indicado pelo seu ambiente, execute
-
-    bun run migration:show
-    bun run migration:run
-    bun run migration:revert
-
-Revert desfaz a migration mais recente. Reverter a fundação remove as cinco tabelas financeiras e seus dados. Use somente no banco pretendido. Os testes de reversibilidade usam exclusivamente o banco temporário.
-Os esquemas TypeORM registram colunas. Revise migrations geradas para preservar constraints e triggers implementadas manualmente.
-
-As garantias de processamento completo, replay HTTP/SQS, eventos, workers e múltiplas instâncias dependem das etapas seguintes.
-
-## Núcleo transacional
-
-FinancialApplicationModule exporta OpenWalletUseCase, ProcessWagerTransactionUseCase e ReprocessPendingReferenceUseCase.
-Os casos de uso recebem contratos de application, com correlação e inbox opcionais, e retornam resultados independentes de transporte.
-Os testes executam abertura, operações financeiras, replay, rejeições, pendências, inbox/outbox e rollback com PostgreSQL real.
-
-Aplique as migrations antes de usar os casos de uso no banco configurado
-
-    bun run migration:run
-
-A migration incremental RejectedSnapshots1797000001000 permite preservar saldo/versão das rejeições para replay.
-Seu downgrade remove esses snapshots de REJECTED/FAILED ao restaurar a constraint anterior, preservando wallets e ledger. Planeje reversões em dados reais.
-Os testes usam bancos temporários e validam run/revert/run sem modificar o banco de desenvolvimento.
-
-O processamento de referência é invocado explicitamente por ID. O padrão tem cinco tentativas totais, TTL de 24h e backoff inicial de 1s, limitado a 60s. Relógio e política podem ser injetados para testes determinísticos.
-Os eventos são gravados na outbox na transação financeira. O consumidor e os workers serão conectados nas etapas seguintes.
-
-## API HTTP financeira — Etapa 8
-
-Os endpoints financeiros estão sem autenticação nesta etapa. Use o ambiente local. A integração futura com IdP externo e autorização tem ponto de extensão em FinancialHttpModule. Antes de iniciar a aplicação, aplique as migrations no ambiente pretendido e execute bun run build e bun run start.
+Os endpoints financeiros usam FinancialAuthGuard no-op, sem autenticação ou autorização. Use o ambiente local; o desenho OIDC está descrito acima. Antes de iniciar a aplicação, aplique as migrations no ambiente pretendido e execute bun run build e bun run start.
 
 Exemplo executável em PowerShell. Cada execução cria um jogador novo. Os objetos retornados pelos comandos mostram as respostas reais da aplicação.
 
@@ -181,7 +122,7 @@ Invoke-RestMethod -Uri "$apiBase/health/ready"
 
 A abertura retorna 201, saldo 1000.00 e versão 1. A BET retorna 200, PROCESSED e saldo 975.00. O ledger inclui OPENING e BET. A reconciliação retorna consistent true, difference 0.00 e checkedEntries 2. Valores monetários são strings.
 
-GET de recurso existente retorna 200. A submissão retorna 202 para referência pendente, 422 para rejeição financeira e 500 para um FAILED terminal persistido. Os resultados financeiros incluem transactionId, status, failureCode/snapshot quando disponíveis e idempotentReplay. Consulte as rotas de transação para acompanhar uma pendência. O agendamento automático será implementado posteriormente.
+GET de recurso existente retorna 200. A submissão retorna 202 para referência pendente, 422 para rejeição financeira e 500 para um FAILED terminal persistido. Os resultados financeiros incluem transactionId, status, failureCode/snapshot quando disponíveis e idempotentReplay. Consulte as rotas de transação para acompanhar uma pendência. O worker de referências realiza o agendamento automaticamente quando habilitado.
 
 Payload/header inválido retorna 400. Recurso inexistente retorna 404. Wallet duplicada e conflitos de identidade retornam 409. Falha transitória retorna 503. Erros usam statusCode, code, message e correlationId. Invoke-RestMethod lança erro para respostas HTTP 4xx/5xx.
 
@@ -203,7 +144,7 @@ Resposta observada na demonstração com JavaScript compilado e banco temporári
 }
 ```
 
-## Mensageria — Etapa 9
+## Mensageria
 
 O consumer reutiliza o processamento financeiro HTTP e a inbox persistente. O publisher lê a outbox confirmada e envia seus envelopes para wager-integration-events.fifo. A entrada permanece wager-transactions.fifo e a DLQ permanece wager-transactions-dlq.fifo.
 
@@ -224,7 +165,7 @@ docker compose exec -T localstack sh /etc/localstack/init/ready.d/init-queues.sh
 bun scripts/sqs.ts queues
 ```
 
-Os workers ficam desligados por padrão. As variáveis são booleanos literais true/false. Execute uma das configurações abaixo em seu terminal PowerShell.
+Fora do Compose, os workers ficam desligados por padrão; o Compose habilita os três workers explicitamente. As variáveis são booleanos literais true/false. Execute uma das configurações abaixo em seu terminal PowerShell.
 
 ```powershell
 # API HTTP
@@ -318,7 +259,7 @@ bun scripts/sqs.ts dlq
 bun scripts/sqs.ts events
 ```
 
-A ferramenta send valida o envelope e usa walletId como grupo FIFO. Cada envio recebe nova deduplication ID do broker, mantendo o messageId de negócio do arquivo. Repetir o envio do mesmo arquivo exercita a idempotência persistente. A ferramenta imprime as identidades de negócio e broker. As inspeções dlq e events usam ReceiveMessage com visibilidade zero e exibem o conteúdo solicitado. Essa leitura pode incrementar o contador de recebimentos. A recuperação administrativa da DLQ será manual e deverá conferir causa, identidade, conteúdo e resultado financeiro antes de qualquer redrive.
+A ferramenta send valida o envelope e usa walletId como grupo FIFO. Cada envio recebe nova deduplication ID do broker, mantendo o messageId de negócio do arquivo. Repetir o envio do mesmo arquivo exercita a idempotência persistente. A ferramenta imprime as identidades de negócio e broker. As inspeções dlq e events usam ReceiveMessage com visibilidade zero e exibem o conteúdo solicitado. Essa leitura pode incrementar o contador de recebimentos. A recuperação administrativa da DLQ é manual e exige conferir causa, identidade, conteúdo e resultado financeiro antes de qualquer redrive.
 
 Rejeições financeiras e referências pendentes persistidas recebem ACK após commit. JSON/envelope inválido e conflitos permanentes são enviados à DLQ antes da exclusão da origem. Falhas transitórias mudam a visibilidade e chegam à DLQ pelo redrive nativo quando esgotadas. Falha no ACK permite redelivery seguro. O publisher oferece at-least-once com eventId estável, backoff e recuperação de linhas pendentes. O processamento concorrente de publishers pode alterar a ordem causal entre eventos da mesma wallet. Os consumidores futuros precisam deduplicar por eventId.
 
@@ -335,9 +276,9 @@ bun run test:integration
 bun test
 ```
 
-O smoke de integração usa dist/main.js com consumer e publisher habilitados em subprocesso Bun. No Windows, o teste dispara o lifecycle SIGTERM por IPC dentro do subprocesso. A validação distribuída com três processos, sinais nativos do sistema operacional e crash abrupto será consolidada posteriormente.
+O smoke de integração usa dist/main.js com consumer e publisher habilitados em subprocesso Bun. No Windows, o teste dispara o lifecycle SIGTERM por IPC dentro do subprocesso. A suíte distribuída descrita adiante comprovou três processos, sinais nativos e crash abrupto.
 
-## Referências pendentes — Etapa 10
+## Referências pendentes
 
 Após aplicar as migrations existentes, habilite o worker automático em PowerShell.
 
@@ -360,9 +301,9 @@ bun test test/unit/pending-reference-worker.test.ts
 bun test test/integration/pending-reference-worker.test.ts
 ```
 
-Os testes de integração usam banco temporário exclusivo, relógio controlado e verificam saldo, ledger e outbox. Dois workers concorrentes no mesmo processo verificam a arbitragem SQL. A validação final com três processos independentes permanece para a etapa distribuída.
+Os testes de integração usam banco temporário exclusivo, relógio controlado e verificam saldo, ledger e outbox. Dois workers concorrentes no mesmo processo verificam a arbitragem SQL. A prova complementar com três processos está registrada nos resultados distribuídos adiante.
 
-## Ambiente distribuído — Etapa 11
+## Imagem e operação distribuída
 
 O Dockerfile usa oven/bun:1.4.4 em múltiplos estágios, instalação frozen, compilação tsc e dependências de produção. A imagem final executa dist/main.js com Bun e usuário bun. A mesma imagem atende migrations e app-1, app-2 e app-3. O PostgreSQL saudável e o hook de filas do LocalStack precedem migrations. As aplicações dependem da conclusão bem-sucedida desse serviço único.
 
@@ -406,9 +347,9 @@ docker compose stop app-1
 docker compose start app-1
 ```
 
-O smoke cria identificadores únicos e mantém os dados financeiros. Verifica wallet compartilhada, BET e replay entre instâncias, WIN via SQS, saldo 85.00, três lançamentos, reconciliação, seis eventos publicados e métricas das três APIs. Para conferir os envelopes publicados, lê a fila de eventos, mantém visibilidade temporária e a devolve no finally, preservando as mensagens. A inspeção incrementa contadores de recebimento dessa fila. SMOKE_APP_URLS permite informar três URLs distintas na ordem app-1, app-2 e app-3. O smoke não cobre a suíte distribuída de concorrência e crash da próxima etapa.
+O smoke cria identificadores únicos e mantém os dados financeiros. Verifica wallet compartilhada, BET e replay entre instâncias, WIN via SQS, saldo 85.00, três lançamentos, reconciliação, seis eventos publicados e métricas das três APIs. Para conferir os envelopes publicados, lê a fila de eventos, mantém visibilidade temporária e a devolve no finally, preservando as mensagens. A inspeção incrementa contadores de recebimento dessa fila. SMOKE_APP_URLS permite informar três URLs distintas na ordem app-1, app-2 e app-3. O smoke é complementar à suíte distribuída de concorrência e crash descrita adiante.
 
-stop_grace_period é 40s para o orçamento de workers de 30s. Logs signal_received, consumer_stopped, outbox_publisher_stopped, pending_reference_worker_stopped, workers_drained e sqs_client_destroyed permitem acompanhar SIGTERM nativo e a ordem de encerramento. O teste cooperativo de stop/start é independente da validação futura de crash abrupto.
+stop_grace_period é 40s para o orçamento de workers de 30s. Logs signal_received, consumer_stopped, outbox_publisher_stopped, pending_reference_worker_stopped, workers_drained e sqs_client_destroyed permitem acompanhar SIGTERM nativo e a ordem de encerramento. O teste cooperativo de stop/start é independente das provas existentes de crash abrupto.
 
 distributed-shutdown.ts usa as portas padrão 3001–3003 e chama Docker Compose pelo Bun. Ele pausa app-2/app-3, cria uma wallet exclusiva, mantém um lock SQL enquanto app-1 recebe LOSS e executa docker compose stop app-1. Após observar SIGTERM, libera o lock e verifica drenagem, fechamento de conexões e ACK condicionado a inbox confirmada. Reinicia as três aplicações e confere recuperação, ledger e reconciliação. Os dados de teste são preservados e as aplicações são reiniciadas também no finally.
 O probe identifica o bloqueador SQL da conexão de teste. A sincronização considera visibilidade e long polling, limitada a 120s. A espera de readiness após restart é limitada a 180s, acompanhando a janela de startup do Compose. Esses prazos de validação são separados do orçamento de shutdown de 30s dos workers e da tolerância de 40s do Compose.
@@ -433,7 +374,7 @@ As famílias incluem wager_transactions_total, wager_replays_total, wager_identi
 
 Gauges consultam PostgreSQL e SQS durante o scrape, incluindo wager_outbox_pending_events, wager_outbox_oldest_pending_age_seconds, wager_reference_pending_transactions e wager_sqs_dlq_messages. Esses valores representam recursos compartilhados e aparecem com scope=shared, devendo ser deduplicados ao consultar várias instâncias. Os flags wager_metrics_database_collection_success e wager_metrics_sqs_collection_success indicam o sucesso da coleta daquela instância. Em falha, os últimos gauges conhecidos são preservados e os contadores continuam disponíveis com HTTP 200. Nenhum identificador financeiro é label. A consolidação pode ser feita futuramente por um coletor Prometheus externo.
 
-## Testes distribuídos da Etapa 12
+## Testes distribuídos e resultados históricos
 
 Use Bun 1.4.4, Docker Compose acessível pelo host e `.env` configurado conforme `.env.example`. PostgreSQL e LocalStack devem estar saudáveis, assim como as três aplicações nas portas 3001–3003. O usuário PostgreSQL local precisa de permissão para criar o banco exclusivo da execução. Execute separadamente da suíte local completa.
 
@@ -458,3 +399,75 @@ A execução `20194d68-d451-4f2a-9901-9be48c430a1f` aprovou A, B, C, D, E1, E2, 
 Uma primeira execução aprovou A/B e parou por erro de leitura do PID no script, corrigido antes da repetição integral. Os diagnósticos estão preservados nos logs. Os detalhes por cenário, IDs dos containers/PIDs e limitações estão em `ARCHITECTURE.md`. Os cenários distribuídos obrigatórios da seção 13 estão comprovados. A causa dos timeouts intermitentes de SQS/readiness das etapas anteriores continua inconclusiva. Esta execução usou os serviços preservados, sem avaliar persistência do LocalStack após sua recriação.
 
 As validações locais da etapa passaram com 356 testes unitários/1.110 assertions e 146 testes de integração/888 assertions. bun test aprovou os 502 testes e 1.998 assertions, preservando os 498 existentes. Build, typecheck, lint, Prettier dos TypeScript alterados e git diff --check passaram. A suíte local foi executada com as aplicações temporariamente paradas para reduzir disputa por recursos.
+
+## Limpeza segura dos recursos exclusivos dos testes distribuídos
+
+A retenção de banco e filas é intencional. Preserve summary.json e os logs antes da limpeza. Escolha uma única execução encerrada; não execute testes, recriações de aplicações ou redrive durante o procedimento. Não use down -v, purge, exclusão por prefixo ou DROP com FORCE.
+
+1. Leia o summary.json exato. Valide runId, banco e as três filas contra o padrão da execução. Os nomes usados para remoção vêm do resumo:
+
+```powershell
+$auditRunId = '20194d68-d451-4f2a-9901-9be48c430a1f' # escolha a execução a remover
+if ($auditRunId -notmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') { throw 'runId inválido' }
+$auditSummary = Get-Content -Raw -LiteralPath "logs/distributed-tests/$auditRunId/summary.json" | ConvertFrom-Json
+if ($auditSummary.runId -cne $auditRunId) { throw 'Resumo de outra execução' }
+$auditDatabase = [string]$auditSummary.database
+if ($auditDatabase -cne ('wager_distributed_' + $auditRunId.Replace('-', ''))) { throw 'Banco não exclusivo' }
+$auditQueues = @([string]$auditSummary.queues.input, [string]$auditSummary.queues.dead, [string]$auditSummary.queues.events)
+$auditExpectedQueues = @("wager-dist-$auditRunId-input.fifo", "wager-dist-$auditRunId-dead.fifo", "wager-dist-$auditRunId-events.fifo")
+for ($auditIndex = 0; $auditIndex -lt 3; $auditIndex++) {
+  if ($auditQueues[$auditIndex] -cne $auditExpectedQueues[$auditIndex]) { throw 'Fila não exclusiva' }
+}
+$auditTargets = @($auditDatabase) + $auditQueues
+$auditTargets
+```
+
+2. Confira a restauração normal das três aplicações: summary.normalConfigurationRestored, readiness nas portas 3001–3003 e configuração efetiva. Inspecione também containers parados que poderiam reiniciar com configuração antiga. O bloco abaixo não imprime senhas e aborta ao encontrar aplicações configuradas para os alvos:
+
+```powershell
+$auditContainerIds = @(docker ps -aq)
+if ($LASTEXITCODE -ne 0) { throw 'Falha ao listar containers' }
+if ($auditContainerIds.Count -gt 0) {
+  $auditContainers = docker inspect @auditContainerIds | ConvertFrom-Json
+  if ($LASTEXITCODE -ne 0) { throw 'Falha ao inspecionar containers' }
+  foreach ($auditContainer in $auditContainers) {
+    foreach ($auditSetting in @($auditContainer.Config.Env)) {
+      $auditPair = $auditSetting -split '=', 2
+      if ($auditPair.Count -eq 2 -and $auditPair[0] -in @('POSTGRES_DB','SQS_QUEUE_NAME','SQS_DLQ_NAME','SQS_EVENTS_QUEUE_NAME') -and $auditPair[1] -cin $auditTargets) {
+        throw ('Recurso ainda configurado no container ' + $auditContainer.Name)
+      }
+    }
+  }
+}
+```
+
+Se houver referência, restaure a configuração normal pelo Compose e repita a inspeção. Verifique também processos Bun no host, terminais, IDE e eventuais clientes externos: encerre os workers exclusivos e retire os alvos de suas configurações. SQS não fornece uma lista de clientes conectados; contagem zero de mensagens não comprova ausência de consumidores. Sem essa verificação operacional, não remova as filas.
+
+3. Consulte pg_stat_activity com o nome exato do resumo. O helper usa as credenciais do serviço PostgreSQL sem mostrá-las. Ele não termina sessões:
+
+```powershell
+function Invoke-AuditSql([string]$auditSql) {
+  $auditSql | docker compose exec -T postgres sh -c 'exec psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" "$@"' audit-psql -X -v ON_ERROR_STOP=1 -v "target_db=$auditDatabase" -At
+  if ($LASTEXITCODE -ne 0) { throw 'Falha na verificação SQL' }
+}
+$auditSessions = Invoke-AuditSql "SELECT count(*) FROM pg_stat_activity WHERE datname = :'target_db';"
+if ([string]$auditSessions -ne '0') { throw 'Banco ainda possui sessões; investigue antes de remover' }
+```
+
+4. Somente após conferir os alvos e a ausência de aplicações, remova os três nomes exatos no LocalStack deste Compose. Não aponte este procedimento para AWS real. Os comandos rodam dentro do LocalStack e fixam o endpoint local:
+
+```powershell
+foreach ($auditQueue in $auditQueues) {
+  $auditQueueUrl = docker compose exec -T localstack awslocal --endpoint-url=http://localhost:4566 sqs get-queue-url --queue-name $auditQueue --query QueueUrl --output text
+  if ($LASTEXITCODE -ne 0 -or -not $auditQueueUrl) { throw 'Fila não encontrada; interrompa e investigue' }
+  docker compose exec -T localstack awslocal --endpoint-url=http://localhost:4566 sqs delete-queue --queue-url $auditQueueUrl
+  if ($LASTEXITCODE -ne 0) { throw 'Falha na remoção da fila exclusiva' }
+}
+# Sem FORCE: conexões concorrentes impedem a remoção em vez de serem terminadas.
+Invoke-AuditSql @'
+SELECT format('DROP DATABASE %I', datname) FROM pg_database WHERE datname = :'target_db'
+\gexec
+'@
+```
+
+Por fim, confira a ausência desse banco com pg_database, a ausência dos três nomes via get-queue-url e a readiness das aplicações normais. Recursos compartilhados e volumes permanecem intactos. O procedimento é administrativo e manual; não é executado automaticamente pelo teste nem pela aplicação.

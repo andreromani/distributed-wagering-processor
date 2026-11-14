@@ -1,9 +1,19 @@
 # Decisões de arquitetura
 
+## Estado atual e leitura do histórico
+
+As etapas 2–12 abaixo preservam decisões, resultados e incidentes históricos. O estado atual inclui núcleo financeiro, sete rotas HTTP, consumer SQS, outbox publisher, referências agendadas, métricas e três processos Docker. Os comandos operacionais consolidados e a limpeza segura estão no README.md. Autenticação real, tracing e teste de carga não foram implementados.
+
+Na Etapa 13.1.1, FinancialAuthGuard no-op tornou explícita a extensão nos três controllers financeiros. Ele não oferece segurança. Substitua o provider por integração com IdP OIDC externo (assinatura, issuer, audience, validade), associe identidade confiável ao request e autorize provider e wallet de cada recurso. Health fica fora do guard. Como guards precedem pipes, entradas usadas para autorização exigem validação própria ou autorização de recurso após os pipes. Referência: https://docs.nestjs.com/guards e índice https://docs.nestjs.com/llms.txt, consultados para NestJS 12.
+
+FinancialExceptionFilter usa contexto por resposta em WeakMap, preenchido pelos controllers somente após pipes/validação manual. O filtro não lê payload/headers brutos. providerId, walletId e transactionId são os identificadores disponíveis da rota validada; operationId é separado, proveniente de FinancialApplicationError com formato UUID, sem afirmar persistência da tentativa. instanceId continua incluído por FinancialDiagnostics. Erros 4xx também produzem diagnóstico sanitizado; contratos e respostas não mudaram.
+
+O hook LocalStack é versionado 100755/LF. O healthcheck é chamado por sh e permanece 100644/LF. A idempotência do hook e o marcador de readiness foram preservados. A validação Linux e os checks desta correção são registrados ao final deste documento. A data desnecessária 11/12/2026 da Etapa 7 foi removida, sem substituí-la por uma data não comprovada.
+
 ## Etapa 2: Bun e compilação
 
 Bun 1.x executa a aplicação, o TypeScript compiler e os testes. ESM e imports relativos .js são preservados.
-O build usa tsc com experimentalDecorators e emitDecoratorMetadata, preservando metadados de tipos para NestJS e futura integração TypeORM. Não usamos bun build como substituto desse compilador.
+O build usa tsc com experimentalDecorators e emitDecoratorMetadata, preservando metadados de tipos para NestJS e integração TypeORM. Não usamos bun build como substituto desse compilador.
 Os testes de código-fonte rodam pelo transpiler do Bun; não devem ser considerados prova de emissão de metadados. A aplicação compilada também deve ser validada.
 O desenvolvimento usa tsc --watch e Bun --watch sobre dist em terminais separados, mantendo a mesma compilação da produção.
 strictPropertyInitialization está habilitado, sem exceções adicionais.
@@ -11,9 +21,9 @@ Observe foi removido por não ser necessário para liveness. Observabilidade com
 
 ## Etapa 3: monólito modular distribuído
 
-Adotamos monólito modular: uma base de código, futuramente replicável em três ou mais processos com PostgreSQL e SQS compartilhados. Simplifica timebox e permite atomicidade futura entre wallet, ledger, transação financeira, inbox e outbox sem transações distribuídas. Microserviços independentes exigiriam coordenação e recuperação adicionais. Trade-off: deploy e escala por processo ficam acoplados; os módulos devem manter limites claros.
+Adotamos monólito modular: uma base replicada em três processos com PostgreSQL e SQS compartilhados. A atomicidade de wallet, ledger, wager, inbox e outbox usa transações SQL locais. O trade-off é deploy e escala acoplados por processo, com limites de domínio/aplicação/infraestrutura.
 
-Domínio terá entidades e invariantes sem NestJS, ORM ou AWS; application orquestrará casos de uso por portas; infrastructure contém adaptadores concretos. AppModule compõe banco, SQS e HTTP. Pastas sem implementação não foram criadas. Entidades de persistência futuras serão separadas das de domínio.
+Domínio contém entidades e invariantes sem NestJS, ORM ou AWS; application orquestra casos de uso por portas; infrastructure contém adaptadores concretos. AppModule compõe banco, SQS, HTTP e observabilidade. Entidades de persistência são separadas do domínio.
 
 TypeORM foi escolhido pela familiaridade e timebox, embora MikroORM seja preferencial no desafio. Options e DataSource reutilizam a mesma configuração validada. synchronize e migrationsRun são false. Pool de três conexões por instância; conexão de 2s e consultas de aproximadamente 2–2,5s. Valores devem ser revistos antes de carga. O Nest gerencia o shutdown do DataSource; SQSClient é destruído por lifecycle provider.
 Inicialização manual permite servir liveness mesmo sem banco; readiness inicializa conexão sob demanda e serializa tentativas concorrentes. Nenhuma conexão é aberta ao importar DataSource do CLI.
@@ -23,10 +33,10 @@ Fonte da escolha: https://blog.localstack.cloud/localstack-for-aws-release-v-4-1
 Mudança de autenticação: https://blog.localstack.cloud/localstack-single-image-next-steps/
 
 Filas obrigatórias FIFO: wager-transactions.fifo e wager-transactions-dlq.fifo.
-Redrive após cinco recebimentos, visibility de 30s e long polling de 20s são parâmetros iniciais; cinco tentativas e visibility são configuráveis. Os workers futuros deverão ajustar visibilidade à duração de processamento e aplicar backoff. FIFO não garante integridade financeira: constraints e transações PostgreSQL serão responsáveis. Hook idempotente cria filas e atualiza atributos antes do marcador de readiness do container.
+Redrive após cinco recebimentos, visibility de 30s e long polling de 20s são parâmetros iniciais; cinco tentativas e visibility são configuráveis. Os workers ajustam visibilidade à duração de processamento e aplicam backoff. FIFO não garante integridade financeira: constraints e transações PostgreSQL são responsáveis. Hook idempotente cria filas e atualiza atributos antes do marcador de readiness do container.
 
 SQS usa endpoint/região/credenciais configurados, duas tentativas no SDK, timeout de conexão de 1s e requisição de 2s; health aplica abort de 2,5s por chamada.
-Readiness consulta banco e ambas as filas; liveness não depende deles. Nenhum consumidor, publisher, outbox, inbox, worker ou regra financeira foi implementado. Transações futuras usarão controle por wallet, nunca lock global; a estratégia detalhada e constraints permanecem para a etapa financeira.
+Readiness consulta PostgreSQL, entrada e DLQ; inclui eventos quando o publisher está habilitado. Liveness verifica o processo. Consumer, publisher e worker de referências estão implementados; transações usam controle por wallet e constraints financeiras.
 
 Testes reais não substituem banco ou SQS por mocks. Falha SQS é isolada com um cliente para porta indisponível. Metadados são verificados no JavaScript compilado e DI é verificada pela criação real do AppModule.
 
@@ -56,7 +66,7 @@ Moedas aceitas nesta entrega são o subconjunto ISO-4217 BRL e USD, em maiúscul
 
 O clone privado do Decimal usa 32 dígitos significativos e ROUND_HALF_EVEN, isolado da configuração global. O intervalo simétrico vai de -9999999999999999999999999999.99 a 9999999999999999999999999999.99, com 28 inteiros e dois decimais. Soma ou subtração dos operandos limitados exige no máximo 31 dígitos, portanto a precisão configurada preserva centavos inclusive antes de detectar overflow. Cada resultado fora do intervalo lança MoneyOutOfRangeError. A API oferece somente adição, subtração e negação, que preservam escala exata. toFixed(2) apenas formata resultados já exatos. Entradas com escala excedente são rejeitadas, sem arredondamento.
 
-A persistência futura deverá usar NUMERIC(30,2) e moeda em coluna separada, preservando strings no TypeORM e reconstruindo Money sem passar por number. Esse schema comporta o intervalo definido. O mapeamento e as migrations financeiras serão implementados na etapa correspondente.
+A persistência usa NUMERIC(30,2) e moeda separada, preserva strings no TypeORM e reconstitui Money sem number. O mapeamento e as migrations financeiras estão implementados.
 
 A configuração isolada segue a API de clone do decimal.js.
 https://mikemcl.github.io/decimal.js/#clone
@@ -86,11 +96,11 @@ Política de valores adotada onde o desafio deixa interpretação aberta
 
 BET debita. WIN e REFUND creditam. ROLLBACK de BET credita e de WIN/REFUND debita. REFUND exige BET processada. Reversões conferem provider, player, wallet, moeda, rodada, identidade externa e igualdade integral do valor. gameId não é exigido na igualdade de contexto porque a seção 7 não o inclui. Referência a si própria é inválida.
 
-WagerTransaction.applyTo aplica regras locais a uma wallet já carregada e retorna seu lançamento, ou undefined para resultado sem efeito ou referência pendente. Recebe referência resolvida pelo chamador. Uma falha de negócio lança FinancialRuleError e preserva saldo, ledger, versão e status anterior. A camada application deverá capturá-la e chamar reject(code). Referência ausente entra em PENDING_REFERENCE. Aplicação bem-sucedida marca PROCESSED. Hash é somente comparado por matchesPayload. O domínio não calcula hash nem consulta armazenamento.
+WagerTransaction.applyTo aplica regras locais a uma wallet já carregada e retorna seu lançamento, ou undefined para resultado sem efeito ou referência pendente. Recebe referência resolvida pelo chamador. Uma falha de negócio lança FinancialRuleError e preserva saldo, ledger, versão e status anterior. A camada application captura a falha e chama reject(code). Referência ausente entra em PENDING_REFERENCE. Aplicação bem-sucedida marca PROCESSED. Hash é somente comparado por matchesPayload. O domínio não calcula hash nem consulta armazenamento.
 
 FailureCode contém INSUFFICIENT_FUNDS, INSUFFICIENT_REVERSAL_FUNDS, CURRENCY_MISMATCH, INVALID_AMOUNT, INVALID_REFERENCE, INVALID_REFERENCE_KIND, REFERENCE_CONTEXT_MISMATCH, REFERENCE_AMOUNT_MISMATCH, REFERENCE_NOT_FOUND, INVALID_KIND, EXTERNAL_OPENING_FORBIDDEN, INVALID_LEDGER, INVALID_TIMESTAMP e PERMANENT_INFRASTRUCTURE_FAILURE. Os códigos identificam falhas locais, expiração futura de referência ou falha permanente. InvalidTransactionStateError identifica uso incorreto de uma entidade terminal.
 
-A etapa de persistência deverá aplicar pessimistic locking por wallet no PostgreSQL. Wallet, transação, ledger, inbox e outbox participarão de uma única transação SQL. Também serão necessárias constraints de não-negatividade, imutabilidade e unicidade de wallet por player/moeda, lançamento por transação/wallet, idempotência e reversão por referência/tipo. Consultar reversões anteriores, resolver referências e evitar duplicatas entre instâncias continuam responsabilidades da aplicação e banco. Testes locais verificam invariantes em memória e reconstrução do saldo pelo ledger.
+A persistência aplica pessimistic locking por wallet no PostgreSQL. Wallet, wager, ledger, inbox e outbox participam de uma transação SQL. Constraints protegem não-negatividade, imutabilidade e unicidade. Aplicação e banco resolvem referências/reversões e duplicatas entre instâncias; integrações e provas distribuídas verificam essas garantias.
 
 ## Etapa 6 — Persistência financeira
 
@@ -104,17 +114,17 @@ O resultado original usa result_balance NUMERIC(30,2) e result_version, associad
 
 wallet_ledger_entries tem FKs sem cascade delete, UNIQUE(wallet_id,transaction_id), checks de direção, quantia positiva, saldos não negativos e equação financeira. Trigger de inserção confere transação PROCESSED, wallet, moeda, montante e direção esperada, excluindo LOSS. Índice (wallet_id,created_at,id) prepara consulta estável e reconciliação. Triggers BEFORE UPDATE/DELETE e BEFORE TRUNCATE rejeitam alterações. O proprietário e superusuários ainda podem remover ou desabilitar triggers ou alterar schema. Produção deverá executar aplicação sem privilégios administrativos e usar outro papel para migrations.
 
-inbox_messages tem PK(consumer_name,message_id), hash e timestamps. outbox_messages tem envelope JSONB, agregado, tipo, data, tentativas, próximo envio e publicação. O índice parcial de pendentes prepara lockDue com FOR UPDATE SKIP LOCKED. Nenhum fluxo de consumo ou publicação é executado por esses adaptadores.
+inbox_messages tem PK(consumer_name,message_id), hash e timestamps. outbox_messages tem envelope JSONB, agregado, tipo, data, tentativas, próximo envio e publicação. O índice parcial de pendentes prepara lockDue com FOR UPDATE SKIP LOCKED. Consumer e publisher utilizam esses adaptadores nas etapas 9–12.
 
 Os mappers persistem quantias como strings e reconstroem Money por rehydrate e entidades por suas factories rehydrate. Não há parser pg para converter NUMERIC em number. PostgreSQL pode arredondar escala excedente ao converter para NUMERIC(30,2), antes de executar checks. A validação estrita de escala continua no Money. SQL direto exige o mesmo cuidado na fronteira de escrita.
 
-TypeOrmFinancialTransaction.run executa READ COMMITTED e entrega repositórios criados exclusivamente com o EntityManager daquela transação. Escritas e locks exigem QueryRunner ativo. findByIdForUpdate emite SELECT FOR UPDATE para uma wallet. Aquisição futura de múltiplas wallets deverá seguir ordem lexicográfica de ID, antes de gravar transações e ledger. Chamadas externas devem ocorrer fora desse bloco. O caso de uso deverá carregar com lock antes de modificar e persistir a wallet. A infraestrutura permite essa disciplina, enquanto o fluxo financeiro completo será desenvolvido na etapa seguinte.
+TypeOrmFinancialTransaction.run executa READ COMMITTED e entrega repositórios criados exclusivamente com o EntityManager daquela transação. Escritas e locks exigem QueryRunner ativo. findByIdForUpdate emite SELECT FOR UPDATE para uma wallet. Aquisição futura de múltiplas wallets deverá seguir ordem lexicográfica de ID, antes de gravar transações e ledger. Chamadas externas devem ocorrer fora desse bloco. O caso de uso carrega com lock antes de modificar e persistir a wallet. O fluxo financeiro completo segue essa disciplina.
 
 Os adaptadores oferecem insert explícito, buscas por identidade e idempotência, consulta de reversão processada, persistência de transições/snapshot e paginação estável do ledger. Ledger não oferece update, delete, save ou upsert. Inbox oferece insert/find e outbox insert/lockDue. O contexto transacional permite confirmar ou desfazer todas essas escritas juntas.
 
 Conflitos 23505 devem ser distinguidos pelo nome de constraint. uq_wager_idempotency e uq_wager_provider_external exigirão nova leitura e comparação de identidade/hash depois do rollback, em nova transação. uq_wager_processed_reversal é conflito de reversão, não replay. O erro deve sair do callback run para o TypeORM desfazer a transação abortada. Não se deve capturar violação SQL e continuar usando o mesmo EntityManager sem rollback ou savepoint.
 
-Testes criam um banco exclusivo wager_test_<uuid>, executam migration:run, migration:revert e migration:run pelo CLI com Bun, e removem somente esse banco. O usuário PostgreSQL de testes precisa de CREATEDB. Os testes verificam SQL inválido diretamente, round trips, snapshot, rollback das cinco tabelas e duas conexões com sincronização por pg_blocking_pids. Os testes de duplicatas 50 vezes e três instâncias serão realizados com o caso de uso futuro.
+Testes criam um banco exclusivo wager_test_<uuid>, executam migration:run, migration:revert e migration:run pelo CLI com Bun, e removem somente esse banco. O usuário PostgreSQL de testes precisa de CREATEDB. Os testes verificam SQL inválido diretamente, round trips, snapshot, rollback das cinco tabelas e duas conexões com sincronização por pg_blocking_pids. Os testes de 50 duplicatas e três instâncias foram concluídos nas etapas 7–12.
 
 Validação executada nesta etapa
 - docker compose config e ps aprovados, PostgreSQL e LocalStack saudáveis.
@@ -189,15 +199,15 @@ REFUND e ROLLBACK usam as validações do domínio e exigem valor integral e ref
 
 WIN exige valor positivo e pode omitir referência. Com referência declarada, aguarda BET válida e permite prêmio diferente da aposta. LOSS aceita valor não negativo, gera WagerTransactionProcessed e mantém saldo, versão e ledger.
 
-Referência inexistente ou encontrada em PENDING/PENDING_REFERENCE permanece pendente. O contexto e tipo da referência encontrada ainda pendente serão conferidos pelo domínio quando ela se tornar elegível. Referências encontradas em REJECTED/FAILED são rejeitadas com INVALID_REFERENCE. Referência terminal incompatível em tipo, valor ou contexto recebe os códigos existentes.
+Referência inexistente ou encontrada em PENDING/PENDING_REFERENCE permanece pendente. Desde a Etapa 7.1, contexto, tipo e valor da referência encontrada são validados estruturalmente mesmo enquanto pendente; o movimento exige referência PROCESSED. Referências encontradas em REJECTED/FAILED são rejeitadas com INVALID_REFERENCE. Referência terminal incompatível em tipo, valor ou contexto recebe os códigos existentes.
 
-Cada resolução sem referência incrementa reference_attempts. O padrão é cinco tentativas totais, incluindo a inicial, TTL de 24 horas desde createdAt e backoff de 1s, 2s, 4s etc., limitado a 60s. O esgotamento ou TTL produz REJECTED/REFERENCE_NOT_FOUND e evento de rejeição. Reprocessamento antes do próximo vencimento retorna sem alterações, exceto quando o TTL já expirou. Operações terminais nunca são reaplicadas. O scheduler futuro deverá passar os IDs elegíveis ao caso de uso.
+Cada resolução sem referência incrementa reference_attempts. O padrão é cinco tentativas totais, incluindo a inicial, TTL de 24 horas desde createdAt e backoff de 1s, 2s, 4s etc., limitado a 60s. O esgotamento ou TTL produz REJECTED/REFERENCE_NOT_FOUND e evento de rejeição. Reprocessamento antes do próximo vencimento retorna sem alterações, exceto quando o TTL já expirou. Operações terminais nunca são reaplicadas. PendingReferenceWorker passa os IDs elegíveis ao caso de uso.
 
 WagerTransactionPendingReference é emitido somente ao entrar efetivamente na pendência. Tentativas seguintes que apenas atualizam agendamento não duplicam o evento. Processamento/rejeição posteriores emitem seus eventos correspondentes. A correlação é recebida por contexto, com transactionId como padrão estável. O reprocessamento pode receber contexto próprio de correlação e causalidade.
 
 ### Inbox, outbox e eventos
 
-InboxMessage possui identidade/hash readonly, datas defensivas e processamento encapsulado. O repositório usa mapper explícito. Mesma identidade de mensagem com hash divergente gera INBOX_CONFLICT. Receipt com hash correspondente ainda não processado pode ser concluído na transação financeira. Uma operação já processada por HTTP pode receber nova inbox sem repetir movimento ou eventos. Inbox e idempotência financeira são garantias distintas. canAcknowledge só é retornado depois do commit. Ack, polling e DLQ permanecem responsabilidades da etapa de consumo.
+InboxMessage possui identidade/hash readonly, datas defensivas e processamento encapsulado. O repositório usa mapper explícito. Mesma identidade de mensagem com hash divergente gera INBOX_CONFLICT. Receipt com hash correspondente ainda não processado pode ser concluído na transação financeira. Uma operação já processada por HTTP pode receber nova inbox sem repetir movimento ou eventos. Inbox e idempotência financeira são garantias distintas. canAcknowledge só é retornado depois do commit. Ack, polling e DLQ são executados pelo consumer da Etapa 9.
 
 OutboxMessage recebe o envelope explícito de IntegrationEvent. Dados e estruturas aninhadas são copiados e congelados, com proteção defensiva das datas. Seus metadados de publicação são reconstruídos pelo mapper, sem implementar retry/publicação nesta etapa.
 
@@ -231,11 +241,11 @@ WagerTransactionProcessed também cobre LOSS e OPENING. WagerTransactionRejected
 
 Os testes unitários usam contexto em memória somente como dublê da orquestração. A garantia financeira é verificada por PostgreSQL real em banco temporário exclusivo, com reconciliação por Money e ledger incluindo OPENING. As falhas injetadas após transação, wallet, ledger, inbox e outbox devem deixar todas as tabelas no estado anterior. Uma nova tentativa válida deve executar uma única vez.
 
-As chamadas concorrentes usam transações e conexões reais no mesmo processo Bun. Isso verifica a arbitragem SQL, sem substituir o teste distribuído futuro com três processos. Controllers financeiros, consultas/reconciliação HTTP, consumo SQS, ack/DLQ, publisher, scheduler, métricas completas, autenticação e orquestração final ainda exigem as próximas etapas do desafio.
+Na Etapa 7, as chamadas concorrentes usavam conexões reais no mesmo processo Bun. As etapas 8–12 acrescentaram HTTP, reconciliação, SQS, ACK/DLQ, publisher, scheduler, métricas e três processos independentes. Autenticação real continua opcional e não implementada.
 
 ### Resultados executados nesta etapa
 
-Em 11/12/2026, com Bun 1.4.4, docker compose config --quiet passou e docker compose ps confirmou PostgreSQL e LocalStack healthy. Build, typecheck e lint passaram. test:unit passou com 217 testes e 763 assertions; test:integration passou com 62 testes e 307 assertions. A execução completa bun test passou com 279 testes, zero falhas e 1070 assertions, preservando os 222 testes anteriores e acrescentando 57 (32 unitários e 25 de integração).
+Com Bun 1.4.4, docker compose config --quiet passou e docker compose ps confirmou PostgreSQL e LocalStack healthy. Build, typecheck e lint passaram. test:unit passou com 217 testes e 763 assertions; test:integration passou com 62 testes e 307 assertions. A execução completa bun test passou com 279 testes, zero falhas e 1070 assertions, preservando os 222 testes anteriores e acrescentando 57 (32 unitários e 25 de integração).
 
 Os testes de persistência executaram os comandos migration:run, migration:revert e migration:run em banco temporário; duas reversões desfizeram a incremental e a fundação antes da reaplicação. O novo conjunto também verificou o ciclo da migration incremental por DataSource. Nenhuma reversão foi executada no banco de desenvolvimento.
 
@@ -257,7 +267,7 @@ canonicalPayloadHash preserva o algoritmo e os campos financeiros da Etapa 7, ex
 
 inboxPayloadHash calcula SHA-256 do JSON canônico com dois campos, payloadHash contendo o hash financeiro canônico e idempotencyKey contendo a chave enviada na mensagem. Essa composição inclui todos os campos financeiros por seu digest estável, reutiliza a canonicalização existente e distingue mensagens com a mesma operação financeira e chaves diferentes. Correlação, receipt handle, número de recebimentos e timestamps de entrega ficam fora do hash.
 
-Receipts antigos da Etapa 7 usavam somente o hash financeiro. Seus hashes não são compatíveis com o novo algoritmo da inbox. Como o consumidor SQS ainda não foi implementado, não foi criada migration nem detecção ambígua de formatos. Os registros existentes são preservados e um replay contra um receipt antigo recebe INBOX_CONFLICT, exigindo avaliação explícita dos dados caso existam receipts fora dos bancos temporários. Nenhum dado é apagado ou reescrito automaticamente.
+Receipts antigos da Etapa 7 usavam somente o hash financeiro. Seus hashes não são compatíveis com o novo algoritmo da inbox. Como o consumidor SQS ainda não existia na Etapa 7.1, não foi criada migration nem detecção ambígua de formatos. Os registros existentes são preservados e um replay contra um receipt antigo recebe INBOX_CONFLICT, exigindo avaliação explícita dos dados caso existam receipts fora dos bancos temporários. Nenhum dado é apagado ou reescrito automaticamente.
 
 ### Referências pendentes e autorreferência
 
@@ -271,7 +281,7 @@ Fixtures antigas de domínio reutilizavam externalTransactionId para a operaçã
 
 Falhas transitórias de infraestrutura aguardam 25 ms antes da segunda tentativa e 50 ms antes da terceira, com teto explícito de 100 ms. A política é determinística e a função de espera pode ser injetada nos testes. Não foi adicionado jitter para essas duas esperas curtas. Conflitos das constraints recuperáveis continuam permitindo nova leitura imediata, após rollback completo. Erros permanentes não são repetidos.
 
-Permanecem o limite de três tentativas, a lista explícita de constraints recuperáveis, a classificação SQL existente e uma nova transação/entidade de domínio por tentativa. Essas esperas pertencem ao retry SQL. O backoff de referências continua usando sua política persistida, e o retry de transporte será responsabilidade do consumidor futuro.
+Permanecem o limite de três tentativas, a lista explícita de constraints recuperáveis, a classificação SQL existente e uma nova transação/entidade de domínio por tentativa. Essas esperas pertencem ao retry SQL. O backoff de referências continua usando sua política persistida, e o retry de transporte é responsabilidade do consumidor.
 
 ### Testes de regressão
 
@@ -325,17 +335,17 @@ Um conjunto estável é percorrido sem duplicações ou omissões. Requisições
 
 TypeOrmWalletReconciliationReader executa uma única consulta SELECT com agregado LATERAL do ledger para a wallet. Em READ COMMITTED, esse único statement observa saldo e ledger no mesmo snapshot, sem lock pessimista e sem carregar os lançamentos em memória. CREDIT soma amount e DEBIT subtrai amount, usando sum(NUMERIC) e COALESCE 0.00. OPENING participa naturalmente. Quantias e difference são retornadas como strings decimais exatas, inclusive resultados assinados, com difference = storedBalance - calculatedBalance. A contagem é o único campo convertido para number, após verificar um inteiro seguro.
 
-Uma divergência retorna HTTP 200 e consistent false. FinancialDiagnostics incrementa reconciliationDivergences e emite JSON com evento wallet_reconciliation_divergence, walletId e correlationId. O contador é por processo, reinicia com a aplicação e fica disponível por getter para integração futura com o exportador de métricas. Nenhum valor financeiro é corrigido e nenhum lançamento é criado. O log omite os valores monetários e o payload completo. O teste de divergência altera saldo somente no banco temporário e verifica ausência de correção. Outro teste mantém uma operação financeira suspensa depois da escrita de ledger, antes do commit, e verifica reconciliação consistente tanto antes quanto depois do commit.
+Uma divergência retorna HTTP 200 e consistent false. FinancialDiagnostics incrementa reconciliationDivergences e emite JSON com evento wallet_reconciliation_divergence, walletId e correlationId. O contador é por processo, reinicia com a aplicação e alimenta o exportador OperationalMetrics. Nenhum valor financeiro é corrigido e nenhum lançamento é criado. O log omite os valores monetários e o payload completo. O teste de divergência altera saldo somente no banco temporário e verifica ausência de correção. Outro teste mantém uma operação financeira suspensa depois da escrita de ledger, antes do commit, e verifica reconciliação consistente tanto antes quanto depois do commit.
 
 ### Correlação e autenticação
 
 x-correlation-id aceita um único identificador de 1 a 128 caracteres em A-Z, a-z, dígitos, ponto, sublinhado, dois-pontos ou hífen. Na ausência, é gerado UUID. O valor validado aparece no header da resposta, nos erros e no contexto passado às operações de escrita e seus eventos outbox. Header inválido recebe 400 com um identificador gerado. Logs de falhas inesperadas/transitórias incluem correlação, código e status, sem mensagens brutas das exceções.
 
-Os endpoints financeiros desta etapa estão sem autenticação. Não estão preparados para exposição pública desprotegida. O ponto de extensão explícito está em FinancialHttpModule, nos três controllers financeiros, para guards que validem tokens de um IdP OIDC externo e autorizem o provider e o acesso às wallets. O desenho futuro deve conferir issuer, audience, assinatura e permissões/identidade do provider. Os health checks permanecem abertos. Não existe autenticação fictícia.
+Os endpoints financeiros desta etapa estão sem autenticação. Não estão preparados para exposição pública desprotegida. FinancialAuthGuard no-op está registrado em FinancialHttpModule e aplicado aos três controllers financeiros; deve ser substituído por integração OIDC e autorização por provider/wallet. O no-op sempre permite e não oferece segurança. O desenho futuro deve conferir issuer, audience, assinatura e permissões/identidade do provider. Os health checks permanecem abertos. Não existe validação de tokens nem identidade autenticada pelo no-op.
 
 ### Escopo e testes
 
-O núcleo transacional da Etapa 7.1 e as migrations foram preservados. A ampliação de leitura do ledger mantém a assinatura anterior findByWallet para os consumidores existentes. O schema e os índices existentes atendem esta etapa. SQS consumer, ack/DLQ, publisher, scheduler, três processos, tracing e métricas operacionais completas continuam nas etapas posteriores.
+Na Etapa 8, o núcleo transacional e as migrations foram preservados, e findPage ampliou a leitura do ledger. Mensageria, referências, observabilidade e orquestração foram concluídas nas etapas 9–12. Tracing continua opcional e não implementado.
 
 Os testes novos cobrem DTOs, headers, mapeamento, cursor, consultas, reconciliação assinada e instrumentação. A aplicação HTTP real usa porta efêmera, PostgreSQL e LocalStack reais e banco wager_http_<uuid> exclusivo. O fechamento inclui aplicação, DataSource e banco temporário. Foram exercitados abertura, duplicidade, saldo zero, operações e snapshots, rejeições, pendências e reprocessamento explícito, consultas, microssegundos, divergência, snapshot concorrente, 50 duplicatas HTTP e duas BET de 80.00 sobre 100.00. A concorrência HTTP é executada em um processo Bun, sem comprovar três instâncias independentes.
 
@@ -409,7 +419,7 @@ A publicação oferece at-least-once. A seleção ordena vencimento, ocorrência
 
 ### Observabilidade e configuração
 
-MessagingDiagnostics produz JSON com instanceId de diagnóstico e, quando disponíveis, consumerName, IDs de negócio/broker, correlação, causalidade, transactionId, walletId, eventId, attempt e failureCode. ReceiptHandle, SQL, credenciais e corpo financeiro ficam fora dos logs. Os contadores têm nomes fixos para recebidas, processadas, replays, rejeições, retries, DLQ, ACKs falhos, publicações, falhas de publicação, esgotamento e falhas de visibilidade. Pending é um gauge de eventos pendentes. Os identificadores não viram labels de métricas. Os valores são por processo e a exposição consolidada fica para observabilidade.
+MessagingDiagnostics produz JSON com instanceId de diagnóstico e, quando disponíveis, consumerName, IDs de negócio/broker, correlação, causalidade, transactionId, walletId, eventId, attempt e failureCode. ReceiptHandle, SQL, credenciais e corpo financeiro ficam fora dos logs. Os contadores têm nomes fixos para recebidas, processadas, replays, rejeições, retries, DLQ, ACKs falhos, publicações, falhas de publicação, esgotamento e falhas de visibilidade. Pending é um gauge de eventos pendentes. Os identificadores não viram labels de métricas. Os valores são por processo e alimentam o exportador de observabilidade.
 
 As opções validadas estão em worker-options.ts e os padrões em .env.example. Consumer e publisher ficam desligados por padrão, mantendo os testes HTTP anteriores isolados de consumo inesperado. HTTP_ENABLED false inicializa ApplicationContext com os workers selecionados. O diretório scripts contém uma ferramenta Bun para envio e inspeção, sem instalação de AWS CLI no Windows.
 
@@ -419,7 +429,7 @@ Os testes reais utilizam banco wager_messaging_<uuid> exclusivo e três filas FI
 
 As regressões verificam HTTP/SQS nas duas ordens, inbox por identidade de negócio, redelivery com nova deduplication ID do broker, commit antes do ACK, falha de DLQ, redrive nativo, publicação original, recuperação, dois publishers com conexões distintas, falha após envio antes do commit de metadados, backoff, shutdown com rollback e renovação real além da visibilidade inicial. O teste Nest mantém uma entrega em andamento e confirma o fechamento posterior do SQSClient e do DataSource. O smoke carrega dist/main.js em subprocesso Bun com ambos os workers habilitados e valida processamento e publicação reais.
 
-No Windows, o smoke solicita o lifecycle SIGTERM por IPC e process.emit no subprocesso, exercitando os hooks registrados pelo bootstrap. Isso permite verificar drenagem e encerramento nesse ambiente. A entrega nativa de sinais pelo sistema operacional e crash abrupto com múltiplas instâncias ficam para a etapa distribuída. O scheduler de referências, três processos simultâneos, consumidor de eventos de saída, redrive administrativo e observabilidade completa permanecem fora desta etapa.
+No Windows, o smoke da Etapa 9 solicita SIGTERM por IPC/process.emit. As provas Linux posteriores exercitam sinais nativos e SIGKILL com três processos. Consumer de eventos de saída e redrive administrativo automatizado continuam fora do escopo implementado; a DLQ tem recuperação manual.
 
 Um resultado inicial PENDING ou canAcknowledge false não qualifica ACK. O handler mantém a entrega recuperável com retry limitado e redrive nativo, sinalizando TRANSACTION_NOT_SETTLED para o estado inicial. Essa política cobre registros iniciais legados sem confundi-los com PENDING_REFERENCE já durável e aceito. A configuração e o adaptador também rejeitam colisão entre nomes de entrada, DLQ e eventos para impedir realimentação acidental do consumer.
 
@@ -448,7 +458,7 @@ A porta PendingReferenceReader e o adaptador TypeOrmPendingReferenceReader selec
 
 O worker delega todas as regras ao ReprocessPendingReferenceUseCase existente. A revisão confirmou que ProcessWagerTransactionUseCase.reprocess já adquire SELECT FOR UPDATE da wallet antes de reler a transação e verificar novamente estado, nextAttemptAt e TTL. READ COMMITTED permite observar o commit de outra instância após aguardar esse lock. Candidatos terminais ou reagendados retornam replay sem novas escritas ou eventos. A seleção concorrente da mesma linha é permitida, com arbitragem na wallet dentro da mesma transação financeira e EntityManager. Tentativas e agendamento são atualizados atomicamente com as demais escritas. Interrupção antes do commit faz rollback, mantendo o candidato recuperável.
 
-Essa estratégia reutiliza a ordem de locks existente e dispensa outra transação externa de claim. O trade-off é disputa adicional pela mesma wallet quando instâncias selecionam candidatos coincidentes, além de processamento sequencial por lote em cada worker. Os timeouts SQL e o deadline da rodada limitam a espera. Dimensionamento de throughput fica para a validação distribuída.
+Essa estratégia reutiliza a ordem de locks existente e dispensa outra transação externa de claim. O trade-off é disputa adicional pela mesma wallet quando instâncias selecionam candidatos coincidentes, além de processamento sequencial por lote em cada worker. Os timeouts SQL e o deadline da rodada limitam a espera. A Etapa 12 comprovou correção distribuída; dimensionamento de throughput exige experimento de carga separado, ainda opcional.
 
 A política existente foi preservada, com cinco tentativas totais incluindo a inicial, backoff exponencial inicial de 1s limitado a 60s e TTL de 24h desde createdAt. Expiração tem precedência mesmo quando nextAttemptAt está no futuro. Rejeição terminal usa REFERENCE_NOT_FOUND e WagerTransactionRejected. Referência resolvida confirma transação, wallet, ledger e eventos atomicamente. Tentativas apenas reagendadas preservam o evento pendente original. Recuperação após restart depende dos campos persistidos.
 
@@ -456,7 +466,7 @@ O worker reutiliza transactionCancellation e os limites WORKER_PROCESSING_TIMEOU
 
 Logs sanitizados identificam início, encerramento, resolução, reagendamento, rejeição e falhas. TransactionId é também a correlationId estável dessa execução automática e dos eventos emitidos por ela, seguindo o padrão existente do caso de uso. Attempt representa a tentativa planejada a partir do candidato selecionado. Replays por candidatos desatualizados não incrementam métricas de tentativa. Os novos contadores locais são pendingReferenceResolved, pendingReferenceRescheduled, pendingReferenceRejected e pendingReferenceFailures. Falhas não classificadas preservam a pendência para nova avaliação e geram diagnóstico, sem rejeição financeira artificial.
 
-Os testes novos usam relógio controlado, sincronização de seleção concorrente e PostgreSQL real em banco wager_references_<uuid> descartável. Verificam resolução automática após chegada de BET, reagendamento, cinco tentativas, TTL mesmo antes do próximo agendamento, dois workers disputando a mesma resolução ou tentativa, restart, rollback após escrita financeira/outbox e cancelamento, seleção limitada e lifecycle NestJS. Cenários financeiros comparam saldo materializado ao reconstruído pelo ledger e conferem eventos da outbox. A concorrência testada ocorre entre conexões no mesmo processo. Três processos independentes, sinais nativos no Windows e crash abrupto continuam pendentes para a etapa distribuída.
+Na Etapa 10, testes com relógio controlado e PostgreSQL real em banco exclusivo verificaram resolução automática, reagendamento, limite/TTL, workers concorrentes, restart, rollback, cancelamento e lifecycle. As provas posteriores da Etapa 12 acrescentaram três processos e crash abrupto, com reconciliação financeira.
 
 Validações da Etapa 10 foram executadas com Bun 1.4.4, PostgreSQL e LocalStack saudáveis. Build, typecheck e lint passaram. test:unit aprovou 344 testes com 1.064 assertions. test:integration aprovou 145 testes com 866 assertions. A execução final de bun test aprovou 489 testes, zero falhas e 1.930 assertions em 15 arquivos. Foram preservados os 466 anteriores e adicionados 11 unitários e 12 de integração. git diff --check passou.
 
@@ -474,7 +484,7 @@ GET /metrics serializa Prometheus text 0.0.4 com vocabulário fechado de nomes e
 
 Os logs HTTP e os eventos de mensageria compartilham a identidade diagnóstica. Correlação HTTP/SQS é preservada nos envelopes persistidos, com IDs financeiros somente em logs. O logger de bootstrap produz JSON e sanitiza erros do framework. O lifecycle registra a drenagem antes do fechamento de recursos, e o adaptador SQS registra destruição do client. O orçamento de workers de 30s é acompanhado de stop_grace_period de 40s no Compose. O ambiente Linux permite validar SIGTERM nativo separadamente do smoke IPC anterior do Windows.
 
-scripts/distributed-smoke.ts executa o fluxo compartilhado de três APIs, replay persistente, WIN SQS, saldo 85.00, ledger, reconciliação, confirmação de seis eventos no PostgreSQL e inspeção dos envelopes efetivos na fila de saída. Identificadores são únicos, os dados financeiros permanecem no banco e as mensagens inspecionadas têm visibilidade devolvida. A seleção temporária de envelopes de saída incrementa ApproximateReceiveCount. O smoke registra instâncias e correlação e utiliza polling limitado. A suíte completa de hot wallet, 50 duplicatas entre processos e crash entre commit/ACK continua para a Etapa 12.
+scripts/distributed-smoke.ts executa o fluxo compartilhado de três APIs, replay persistente, WIN SQS, saldo 85.00, ledger, reconciliação, confirmação de seis eventos no PostgreSQL e inspeção dos envelopes efetivos na fila de saída. Identificadores são únicos, os dados financeiros permanecem no banco e as mensagens inspecionadas têm visibilidade devolvida. A seleção temporária de envelopes de saída incrementa ApproximateReceiveCount. O smoke registra instâncias e correlação e utiliza polling limitado. A suíte completa foi comprovada na Etapa 12, descrita abaixo.
 
 scripts/distributed-shutdown.ts valida stop cooperativo com uma entrega real em andamento. App-2/app-3 são pausadas e app-1 recebe LOSS enquanto a wallet exclusiva está bloqueada por uma conexão de teste. A detecção de espera em pg_stat_activity precede docker compose stop app-1. O script aguarda o log de SIGTERM e libera o lock. Verifica workers encerrados antes de workers_drained, banco ainda conectado nesse ponto, destruição posterior do SQSClient, ausência de conexões app-1 após stop e inbox confirmada para qualquer ACK observado. O restart das três aplicações é seguido de estado terminal, contabilização única e reconciliação. Esse cenário não provoca crash abrupto.
 
@@ -499,7 +509,7 @@ O probe de shutdown foi ajustado após deadlines de sincronização e restart. A
 - test:unit aprovou 352 testes e 1.098 assertions. test:integration aprovou 146 testes e 888 assertions. A última execução de bun test aprovou 498 testes, zero falhas e 1.986 assertions em 17 arquivos. Os 489 anteriores foram preservados e nove foram adicionados.
 - Uma execução intermediária após o ajuste de healthcheck ainda apresentou readiness 503 em um teste, com 497 aprovados e uma falha. Esse resultado reforça que a causa da instabilidade permanece inconclusiva. Os stacks e diagnósticos foram preservados em logs/stage11-tests-first.log e logs/stage11-tests-second-failure.log.
 
-Não foram adicionadas dependências, versões de migration ou regras financeiras. Permanecem a volatilidade previamente documentada das filas do LocalStack em recriação, a investigação dos timeouts intermitentes e os cenários distribuídos da Etapa 12. A suíte de 50 duplicatas entre processos, hot wallet e crash abrupto não foi implementada nesta etapa.
+Na Etapa 11 não foram adicionadas dependências, migrations ou regras financeiras. A Etapa 12 concluiu as provas de 50 duplicatas, hot wallet e crash abrupto. Permanecem a volatilidade do LocalStack em recriação e a causa inconclusiva dos timeouts históricos.
 
 ## Etapa 12 — provas distribuídas
 
@@ -544,3 +554,19 @@ Todos os oito cenários distribuídos da seção 13 foram comprovados nesta etap
 Build, typecheck e lint passaram. test:unit aprovou 356 testes e 1.110 assertions. test:integration aprovou 146 testes e 888 assertions com PostgreSQL/LocalStack reais. bun test aprovou 502 testes, zero falhas e 1.998 assertions em 18 arquivos. Os 498 testes existentes foram preservados e quatro testes unitários das barreiras foram adicionados. Essas contagens são distintas das nove provas distribuídas com 1.208 assertions próprias.
 
 As suítes local e distribuída foram executadas em momentos separados. Durante a suíte local, somente as aplicações estavam paradas. As validações individuais e a execução agregada passaram na primeira execução desta etapa. Lint adicional do script distribuído, Prettier dos seis TypeScript criados/alterados e git diff --check também passaram. Os logs locais são mantidos em logs/stage12-*.log. O build da imagem concluiu com bun install --frozen-lockfile nas dependências de desenvolvimento e produção.
+
+## Etapa 13.1.1 — Correções finais da auditoria
+
+Foram alterados somente permissões do hook, contexto dos logs HTTP, extensão no-op de autenticação, testes direcionados e documentação. As regras financeiras, migrations, dependências e contratos de resposta foram preservados. Os 502 testes anteriores não foram removidos; cinco testes foram acrescentados à integração HTTP. Não foi repetida a suíte completa nem a distribuída nesta etapa.
+
+`git ls-files --stage '*.sh'` confirmou init-queues.sh em 100755, com o mesmo blob f7adb6e3eeae8d66ad3d4f9b67848a024c203a54, e healthcheck.sh em 100644, pois o Compose o chama por sh. Ambos foram conferidos byte a byte sem CR e com LF. O modo do hook foi atualizado no índice Git, sem commit.
+
+A validação Linux exportou a árvore do índice f366483c2b4af672fe8f9bbbba932756199acaa7 por git archive, sem criar commit, e a extraiu no filesystem nativo de um container, com umask 022. Os scripts não foram executados a partir de bind mount Windows e não receberam chmod manual. stat confirmou 755 no hook e 644 no healthcheck. Para construir a imagem atual, os arquivos src da árvore de trabalho foram sobrepostos à exportação; o restante veio da árvore Git limpa, sem node_modules, dist ou .env do host.
+
+O probe final wager-stage1311-d51b5f97 iniciou LocalStack 4.14.0 em rede exclusiva, sem portas publicadas; o hook instalado antes do startup criou as três filas FIFO exclusivas e /tmp/queues-ready. Duas execuções diretas adicionais mantiveram exatamente as mesmas três filas e o healthcheck passou. O Dockerfile original construiu a imagem com instalação frozen e compilação Bun/tsc. PostgreSQL 16.11 exclusivo, com dados em tmpfs, recebeu as duas migrations com COMMIT. Uma aplicação da imagem atual, com os três workers habilitados, retornou readiness 200 e criou wallet zero com HTTP 201. Não foi uma repetição dos cenários de três processos: o objetivo foi startup isolado do código atual em Linux. Evidências locais ignoradas pelo Git: logs/stage1311-linux.json, logs/stage1311-linux-build-errors.log e logs/stage1311-linux-app.log. Os containers, rede e imagem exclusivos foram removidos; os cinco serviços compartilhados permaneceram saudáveis.
+
+Build, typecheck e lint passaram. Prettier --check passou nos oito TypeScript criados/alterados. `bun test test/unit/financial-http.test.ts test/unit/observability.test.ts` aprovou 58 testes e 129 assertions. `bun test test/integration/financial-http.test.ts test/integration/observability.test.ts test/integration/metadata.test.ts` aprovou 38 testes e 322 assertions, com PostgreSQL/LocalStack reais. `docker compose config --quiet` e git diff --check passaram. Os 20 blocos PowerShell do README foram analisados sintaticamente; a exclusão dos recursos distribuídos retidos não foi executada.
+
+A primeira execução da integração nova teve uma assertion incorreta: esperava ausência de operationId em falha transitória. O retry existente fornece o ID da tentativa mesmo sem persistência. O teste passou a verificar esse ID e sua ausência em wager_transactions, sem tratá-lo como transactionId; a repetição direcionada passou. O primeiro probe Linux parou no transporte do tar por ausência do diretório de destino na imagem; o preparo dos diretórios no tar foi corrigido antes das provas aprovadas. Esses incidentes não exigiram alteração financeira.
+
+O README agora inicia pelo setup atual, preserva exemplos HTTP/SQS e resultados históricos e descreve limpeza manual por runId e nomes exatos de summary.json. A limpeza exige inspeção das configurações de containers/processos e de sessões PostgreSQL; SQS não fornece lista de clientes conectados. Ela não apaga volumes, recursos compartilhados ou bancos por prefixo. A data desnecessária da Etapa 7 foi removida sem inventar substituta. Permanecem a volatilidade do LocalStack em recriação e a causa inconclusiva dos timeouts históricos de SQS/readiness. A validação final completa e os testes manuais ficam para a etapa seguinte.

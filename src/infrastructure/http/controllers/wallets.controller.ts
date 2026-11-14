@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  UseGuards,
   Get,
   Post,
   Param,
@@ -25,8 +26,11 @@ import { ListWalletLedgerQueryDto } from '../dtos/list-wallet-ledger-query.dto.j
 import { httpValidation } from '../validation.js';
 import { walletResponse } from '../mappers/wallet-response.mapper.js';
 import { ledgerResponse } from '../mappers/wallet-ledger-response.mapper.js';
+import { FinancialAuthGuard } from '../financial-auth.guard.js';
+import { setFinancialErrorContext } from '../financial-error-context.js';
 
 @Controller('wallets')
+@UseGuards(FinancialAuthGuard)
 export class WalletsController {
   constructor(
     @Inject(OpenWalletUseCase) private readonly open: OpenWalletUseCase,
@@ -54,7 +58,9 @@ export class WalletsController {
   @Get(':walletId')
   async find(
     @Param('walletId', new ParseUUIDPipe({ version: 'all' })) walletId: string,
+    @Res({ passthrough: true }) response: Response,
   ): Promise<OpenWalletResult> {
+    setFinancialErrorContext(response, { walletId });
     return walletResponse(await this.get.execute(walletId));
   }
 
@@ -63,10 +69,12 @@ export class WalletsController {
     @Param('walletId', new ParseUUIDPipe({ version: 'all' })) walletId: string,
     @Query(httpValidation(ListWalletLedgerQueryDto))
     query: ListWalletLedgerQueryDto,
+    @Res({ passthrough: true }) response: Response,
   ): Promise<{
     items: ReturnType<typeof ledgerResponse>[];
     nextCursor: string | null;
   }> {
+    setFinancialErrorContext(response, { walletId });
     const page = await this.list.execute(
       walletId,
       query.limit === undefined ? 50 : Number(query.limit),
@@ -83,6 +91,7 @@ export class WalletsController {
     @Param('walletId', new ParseUUIDPipe({ version: 'all' })) walletId: string,
     @Res({ passthrough: true }) response: Response,
   ): Promise<ReconciliationResult> {
+    setFinancialErrorContext(response, { walletId });
     response.status(200);
     return this.reconcile.execute(
       walletId,

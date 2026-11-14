@@ -8,6 +8,7 @@ import type { Request, Response } from 'express';
 import { FinancialApplicationError } from '../../../application/errors/financial-application.error.js';
 import { PersistenceError } from '../../../application/ports/persistence.error.js';
 import { FinancialDiagnostics } from '../financial-diagnostics.js';
+import { financialErrorContext } from '../financial-error-context.js';
 
 export function financialHttpError(error: unknown): {
   statusCode: number;
@@ -109,13 +110,22 @@ export class FinancialExceptionFilter implements ExceptionFilter {
     const correlationId = String(
       response.getHeader('x-correlation-id') ?? crypto.randomUUID(),
     );
-    if (mapped.statusCode >= 500 || mapped.statusCode === 409) {
+    const operationId =
+      error instanceof FinancialApplicationError &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        error.operationId ?? '',
+      )
+        ? error.operationId
+        : undefined;
+    if (mapped.statusCode >= 400) {
       this.diagnostics.record({
         level: 'error',
         event: 'http_request_failed',
         statusCode: mapped.statusCode,
         code: mapped.code,
         correlationId,
+        ...financialErrorContext(response),
+        ...(operationId === undefined ? {} : { operationId }),
       });
     }
     response.status(mapped.statusCode).json({ ...mapped, correlationId });

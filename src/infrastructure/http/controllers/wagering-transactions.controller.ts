@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  UseGuards,
   Get,
   Post,
   Param,
@@ -11,6 +12,8 @@ import {
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { FinancialDiagnostics } from '../financial-diagnostics.js';
+import { FinancialAuthGuard } from '../financial-auth.guard.js';
+import { setFinancialErrorContext } from '../financial-error-context.js';
 import { ProcessWagerTransactionUseCase } from '../../../application/use-cases/process-wager-transaction.use-case.js';
 import { GetWagerTransactionUseCase } from '../../../application/use-cases/get-wager-transaction.use-case.js';
 import { ProcessWagerTransactionDto } from '../dtos/process-wager-transaction.dto.js';
@@ -23,6 +26,7 @@ import {
 } from '../mappers/wager-transaction-response.mapper.js';
 
 @Controller('wagering/transactions')
+@UseGuards(FinancialAuthGuard)
 export class WageringTransactionsController {
   constructor(
     @Inject(ProcessWagerTransactionUseCase)
@@ -40,6 +44,10 @@ export class WageringTransactionsController {
     @Req() request: Request,
     @Res({ passthrough: true }) response: Response,
   ): Promise<ReturnType<typeof processingResponse>> {
+    setFinancialErrorContext(response, {
+      providerId: body.providerId,
+      walletId: body.walletId,
+    });
     const idempotencyKey = requestHeader(request, 'idempotency-key', true);
     if (idempotencyKey === undefined) {
       throw new Error('Validated idempotency header is missing');
@@ -72,7 +80,9 @@ export class WageringTransactionsController {
   async find(
     @Param('transactionId', new ParseUUIDPipe({ version: 'all' }))
     transactionId: string,
+    @Res({ passthrough: true }) response: Response,
   ): Promise<ReturnType<typeof wagerResponse>> {
+    setFinancialErrorContext(response, { transactionId });
     return wagerResponse(await this.get.execute(transactionId));
   }
 }
