@@ -4,7 +4,15 @@ Serviço NestJS/Bun com PostgreSQL, TypeORM e SQS FIFO via LocalStack. HTTP e SQ
 
 ## Início rápido
 
-Pré-requisitos: Bun 1.x (1.4.4 validado), Docker com containers Linux e Docker Compose. Em PowerShell, a partir da raiz do clone:
+Pré-requisitos: Git, Bun 1.x (1.4.4 validado), Docker com containers Linux e Docker Compose v2 com suporte a `up --wait`; os exemplos HTTP de Linux usam curl. Docker deve estar acessível pelo terminal. Substitua `URL_DO_REPOSITORIO` pela URL desta entrega:
+
+```sh
+git clone 'URL_DO_REPOSITORIO' distributed-wagering-processor
+cd distributed-wagering-processor
+git switch docs/final-delivery
+```
+
+No Windows PowerShell, a partir da raiz do clone:
 
 ```powershell
 Copy-Item .env.example .env
@@ -14,9 +22,23 @@ docker compose build
 docker compose up -d --wait
 docker compose ps -a
 Invoke-RestMethod http://localhost:3001/health/ready
+(Invoke-WebRequest -Uri 'http://localhost:3001/metrics' -UseBasicParsing).Content
 ```
 
-Use apenas credenciais fictícias localmente. .env não é versionado. No shell Linux, use `cp .env.example .env`; os demais comandos Bun/Docker são iguais. O hook init-queues.sh é versionado com modo 100755 e LF; ele cria idempotentemente entrada, DLQ, eventos e o marcador de readiness. O healthcheck.sh também usa LF, mas é invocado por `sh` e não requer bit executável.
+No Linux (Bash/sh):
+
+```sh
+cp .env.example .env
+bun install --frozen-lockfile
+docker compose config --quiet
+docker compose build
+docker compose up -d --wait
+docker compose ps -a
+curl --fail --silent --show-error http://localhost:3001/health/ready
+curl --fail --silent --show-error http://localhost:3001/metrics
+```
+
+Use apenas credenciais fictícias localmente. `.env.example` fornece a configuração local; `.env` não é versionado. Não sobrescreva um `.env` existente sem revisar sua configuração. Se alterar POSTGRES_PORT ou LOCALSTACK_PORT no host, ajuste também POSTGRES_PORT ou SQS_ENDPOINT no `.env` usado pelo Bun; dentro do Compose os serviços continuam em postgres:5432 e localstack:4566. As portas HTTP 3001–3003 devem estar livres. O hook init-queues.sh é versionado com modo 100755 e LF; ele cria idempotentemente entrada, DLQ, eventos e o marcador de readiness. O healthcheck.sh também usa LF, mas é invocado por `sh` e não requer bit executável.
 
 O Compose aguarda PostgreSQL/LocalStack saudáveis, executa migrations uma vez e inicia três aplicações da mesma imagem. APIs: http://localhost:3001, :3002 e :3003. Os quatro componentes (HTTP, consumer, publisher e referências) estão habilitados. Health: /health/live e /health/ready; métricas: /metrics. Use a porta 3001 nos exemplos HTTP/SQS abaixo quando executar pelo Compose.
 
@@ -24,7 +46,7 @@ O volume postgres-data preserva dados. As filas de desenvolvimento do LocalStack
 
 ## Validar e executar no host
 
-Execute as suítes locais separadamente das provas distribuídas. Integrações exigem PostgreSQL e LocalStack reais, build prévio e permissão CREATEDB para bancos temporários. Para reduzir disputa por recursos, pode parar somente as aplicações:
+Execute as suítes locais separadamente das provas distribuídas. Integrações exigem PostgreSQL e LocalStack reais, build prévio e permissão CREATEDB para bancos temporários. Os comandos Bun/Docker deste bloco são iguais em Linux e PowerShell. Após subir o Compose, para reduzir disputa por recursos, pode parar somente as aplicações:
 
 ```powershell
 docker compose stop app-1 app-2 app-3
@@ -54,7 +76,7 @@ Os comandos compilam e usam o CLI TypeORM com Bun. Para criar nova migration: `b
 
 FinancialFoundation1797000000000 cria as cinco tabelas, constraints e triggers. RejectedSnapshots1797000001000 permite snapshots de rejeições para replay. O downgrade incremental remove esses snapshots, preservando saldo/ledger. Reverter a fundação remove tabelas e dados: não use como limpeza de testes. A reversibilidade run/revert/revert/run é testada em banco exclusivo.
 
-Money usa NUMERIC(30,2) e strings, sem conversão para number; moeda fica separada. A validação de escala ocorre antes do SQL, que pode arredondar entradas diretas. TypeOrmFinancialTransaction compartilha EntityManager READ COMMITTED, lock individual por wallet e confirma saldo, wager, ledger, inbox e outbox atomicamente. Replay usa saldo/versão originais. Detalhes de concorrência, decisões de negócio, códigos e limitações estão em ARCHITECTURE.md.
+Money é imutável e usa decimal.js para aritmética exata. Contratos e mappers representam dinheiro como strings com duas casas; PostgreSQL persiste NUMERIC(30,2), com moeda separada e sem conversão para number. A validação de escala ocorre antes do SQL, que pode arredondar entradas diretas. TypeOrmFinancialTransaction compartilha EntityManager READ COMMITTED, lock individual por wallet e confirma saldo, wager, ledger, inbox e outbox atomicamente. Idempotência é persistente e protegida por constraints; replay usa saldo/versão originais. Triggers impedem UPDATE, DELETE e TRUNCATE do ledger. Detalhes de concorrência, decisões de negócio, códigos e limitações estão em ARCHITECTURE.md.
 
 ## Autenticação e diagnóstico
 
@@ -62,14 +84,113 @@ Autenticação não foi implementada. FinancialAuthGuard é um guard no-op aplic
 
 Logs HTTP de erro incluem correlação, instância e identificadores capturados somente após validação dos DTOs/parâmetros. transactionId representa um parâmetro interno de consulta; operationId vem do erro da aplicação e pode identificar uma tentativa ainda não persistida. Não se infere transação confirmada desse campo. Payload inválido não fornece contexto confiável. Nenhum corpo financeiro, token, SQL ou stack bruto é registrado.
 
+## Demonstração manual com Postman
+
+Importe `postman/distributed-wagering.postman_collection.json` (schema v2.1, 49 requisições) e `postman/local.postman_environment.json` pelo botão Import do Postman. Selecione o environment **Distributed Wagering — Local**. As URLs padrão são localhost:3001, :3002 e :3003; mantenha o Compose saudável, com consumer, publisher e worker de referências habilitados. Não são necessários tokens ou credenciais reais.
+
+Execute as pastas 01–06 na ordem: health/métricas, wallet, fluxo principal, rejeições, referências fora de ordem e paginação. A primeira requisição de 02 gera jogador, provider, rodada, identidades externas e chaves novas. Ela captura walletId; as operações capturam transactionId e a paginação captura nextCursor. A pasta 03 depende de 02; 06 depende de 03 completa. As pastas 04 e 05 criam suas próprias wallets e podem ser reiniciadas independentemente, sempre pela primeira requisição. Ao executar pastas separadas no Runner, habilite Keep variable values para preservar as capturas entre execuções. Não compartilhe o mesmo environment entre execuções concorrentes.
+
+O fluxo principal termina em 1000.00 BRL e cinco lançamentos. A pasta 04 diferencia 409 por chave/payload e identidade externa, 422 por saldo insuficiente ou reversão repetida e 400 por moeda incompatível, Money numérico ou header ausente. O replay da BET rejeitada preserva 75.00 mesmo após crédito posterior. Os testes das respostas usam strings monetárias, nunca cálculos com ponto flutuante.
+
+Na pasta 05, envie REFUND, consulta pendente e BET rapidamente em sequência: a política padrão tem cinco tentativas totais e pode esgotar em aproximadamente 15–20 segundos. Após a BET, aguarde o backoff e repita a consulta 5 até PROCESSED; só então continue para wallet/ledger/reconciliação. Com Send individual, a repetição é manual. No Collection Runner, use uma iteração e delay de 1000 ms; a consulta repete até 20 respostas e interrompe o fluxo se não concluir. Se REJECTED/REFERENCE_NOT_FOUND, reinicie a pasta desde a criação. Esse controle usa o [workflow oficial do Postman](https://learning.postman.com/docs/tests-and-scripts/running-collections/building-workflows/).
+
+Na pasta 06, comece sempre pela página 1: as páginas 2/2/1 acumulam IDs para detectar repetições. Não envie operações extras à wallet principal entre esses passos. Repetir uma criação inicia outra execução; repetir isoladamente operações posteriores pode retornar replay ou outro snapshot e invalidar expectativas sequenciais. A collection cria registros permanentes de demonstração e não exclui dados. Os arquivos entregues mantêm variáveis dinâmicas, sem IDs das sessões manuais; os resultados manuais estão registrados abaixo, separadamente da revisão estática final.
+
+### SQS durante a demonstração
+
+Postman demonstra somente HTTP. No PowerShell, a partir da raiz do projeto e com `.env` local configurado, envie um envelope novo pela ferramenta existente:
+
+```powershell
+$demoApi = 'http://localhost:3001'
+$demoPlayer = [guid]::NewGuid().ToString()
+$demoWallet = Invoke-RestMethod -Method Post -Uri "$demoApi/wallets" -ContentType 'application/json' -Body (@{ playerId=$demoPlayer; initialBalance=@{amount='100.00';currency='BRL'} } | ConvertTo-Json -Depth 4)
+$demoProvider = 'postman-sqs-' + [guid]::NewGuid().ToString()
+$demoExternal = [guid]::NewGuid().ToString()
+$demoEnvelope = @{
+  messageId=[guid]::NewGuid().ToString(); type='WagerTransactionRequested'
+  occurredAt=[DateTime]::UtcNow.ToString('o'); correlationId=[guid]::NewGuid().ToString()
+  data=@{
+    providerId=$demoProvider; externalTransactionId=$demoExternal; idempotencyKey="${demoProvider}:$demoExternal"
+    playerId=$demoPlayer; walletId=$demoWallet.id; roundId=[guid]::NewGuid().ToString(); gameId='postman-demo'
+    kind='BET'; money=@{amount='25.00';currency='BRL'}
+  }
+}
+New-Item -ItemType Directory -Force tmp | Out-Null
+$demoFile = Join-Path (Get-Location) 'tmp/postman-valid-message.json'
+[IO.File]::WriteAllText($demoFile, ($demoEnvelope | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
+bun scripts/sqs.ts send $demoFile
+# Aguarde o consumer; se ainda retornar 404, repita a consulta.
+Invoke-RestMethod "$demoApi/providers/$demoProvider/wagering/transactions/$demoExternal"
+bun scripts/sqs.ts queues
+bun scripts/sqs.ts events
+bun scripts/sqs.ts dlq
+```
+
+`scripts/sqs.ts send` valida antes do envio: um arquivo inválido falha localmente e não chega à DLQ. Para demonstrar a DLQ real sem alterar o script, use o awslocal já presente no LocalStack para enviar um corpo inválido à entrada:
+
+```powershell
+$demoInvalidId = [guid]::NewGuid().ToString()
+$demoQueueUrl = docker compose exec -T localstack sh -c 'awslocal sqs get-queue-url --queue-name "$SQS_QUEUE_NAME" --query QueueUrl --output text'
+if ($LASTEXITCODE -ne 0 -or -not $demoQueueUrl) { throw 'Não foi possível resolver a fila local' }
+docker compose exec -T localstack awslocal sqs send-message --queue-url $demoQueueUrl --message-body INVALID_JSON --message-group-id postman-invalid --message-deduplication-id $demoInvalidId
+# Aguarde o consumer e repita para observar INVALID_MESSAGE nos atributos da DLQ.
+bun scripts/sqs.ts dlq
+```
+
+O resultado é assíncrono e o grupo separado do exemplo inválido evita bloquear o grupo financeiro válido. Nenhum envio foi repetido automaticamente na revisão documental final.
+
+| Comando existente | Comportamento real |
+| --- | --- |
+| `bun scripts/sqs.ts send message.json` | Lê e valida o envelope, envia à entrada FIFO com walletId como MessageGroupId e uma nova deduplication ID de transporte por envio; imprime businessMessageId e sqsMessageId. Não espera o processamento financeiro. |
+| `bun scripts/sqs.ts queues` | Consulta URLs e atributos das três filas; não consome mensagens. Quantidades fornecidas pelo SQS são aproximadas. |
+| `bun scripts/sqs.ts dlq` | Recebe uma amostra de até dez mensagens da DLQ com atributos, long polling de 1s e visibilidade zero. Não exclui mensagens e pode incrementar ApproximateReceiveCount. |
+| `bun scripts/sqs.ts events` | Faz a mesma inspeção na fila de eventos. Não equivale a listar todo o histórico nem a confirmar eventos como consumidor. |
+
+### BET SQS usando uma wallet existente
+
+Em um clone novo, grave o exemplo abaixo em `message.json` (UTF-8 sem BOM). Se já existir um arquivo com esse nome, preserve-o e use outro caminho, como `tmp/message-example.json`, passando esse caminho ao comando send. Os UUIDs abaixo são fictícios: substitua **playerId e walletId juntos** pelos dados retornados por `GET /wallets/:walletId`. A moeda precisa ser a da wallet e o saldo deve comportar 50.00. Use messageId, externalTransactionId e idempotencyKey novos para uma nova operação; atualize occurredAt para o horário atual em ISO-8601. Não use providerId `internal` nem chaves com prefixo `opening:`.
+
+```json
+{
+  "messageId": "demo-message-001",
+  "type": "WagerTransactionRequested",
+  "occurredAt": "2026-11-14T12:00:00.000Z",
+  "correlationId": "demo-sqs-001",
+  "data": {
+    "providerId": "provider-demo",
+    "externalTransactionId": "demo-bet-001",
+    "idempotencyKey": "provider-demo:demo-bet-001",
+    "playerId": "11111111-1111-4111-8111-111111111111",
+    "walletId": "22222222-2222-4222-8222-222222222222",
+    "roundId": "demo-round-001",
+    "gameId": "postman-demo",
+    "kind": "BET",
+    "money": { "amount": "50.00", "currency": "BRL" }
+  }
+}
+```
+
+Os comandos de envio/inspeção são idênticos em Linux e PowerShell, com Bun instalado e `.env` configurado para o host:
+
+```sh
+bun scripts/sqs.ts send message.json
+bun scripts/sqs.ts queues
+bun scripts/sqs.ts dlq
+bun scripts/sqs.ts events
+```
+
+Consulte `GET /providers/provider-demo/wagering/transactions/demo-bet-001`, substituindo provider/external ID pelos usados no arquivo. Em PowerShell: `Invoke-RestMethod 'http://localhost:3001/providers/provider-demo/wagering/transactions/demo-bet-001'`; em Linux: `curl --fail --silent --show-error 'http://localhost:3001/providers/provider-demo/wagering/transactions/demo-bet-001'`. Se ainda retornar 404, aguarde o consumer e repita. O retorno fornece transactionId para `GET /wagering/transactions/:transactionId`.
+
+Para reproduzir a deduplicação financeira com duas inboxes, envie uma segunda cópia alterando **somente o messageId do envelope**. Preserve data, externalTransactionId, idempotencyKey e contexto financeiro. A nova mensagem gera outra inbox e replay da mesma operação, sem novo débito nem novos eventos financeiros. Reenviar o arquivo sem mudar messageId exercita a mesma inbox. Em uma wallet inicialmente com 1000.00 e sem outras operações, o saldo fica 950.00 após ambos os envios.
+
 ## API HTTP financeira
 
-Os endpoints financeiros usam FinancialAuthGuard no-op, sem autenticação ou autorização. Use o ambiente local; o desenho OIDC está descrito acima. Antes de iniciar a aplicação, aplique as migrations no ambiente pretendido e execute bun run build e bun run start.
+Os endpoints financeiros usam FinancialAuthGuard no-op, sem autenticação ou autorização. Use o ambiente local; o desenho OIDC está descrito acima. O Compose já executa migrations e inicia as aplicações nas portas 3001–3003. Para iniciar uma API separada no host, aplique as migrations no ambiente pretendido e execute bun run build e bun run start, usando a porta 3000 de .env nos exemplos.
 
 Exemplo executável em PowerShell. Cada execução cria um jogador novo. Os objetos retornados pelos comandos mostram as respostas reais da aplicação.
 
 ```powershell
-$apiBase = 'http://localhost:3000'
+$apiBase = 'http://localhost:3001' # use 3000 somente para a API executada no host
 $playerId = [guid]::NewGuid().ToString()
 $walletBody = @{
   playerId = $playerId
@@ -221,7 +342,7 @@ A recepção efetiva usa o mínimo entre lote e concorrência. Mensagens do mesm
 Exemplo executável em PowerShell com a API habilitada. Use o consumer habilitado em outra instância ou na mesma aplicação. O arquivo é gravado em UTF-8 sem BOM para funcionar também no Windows PowerShell 5.1.
 
 ```powershell
-$apiBase = 'http://localhost:3000'
+$apiBase = 'http://localhost:3001' # use 3000 somente para a API executada no host
 $walletBody = @{
   playerId = [guid]::NewGuid().ToString()
   initialBalance = @{ amount = '100.00'; currency = 'BRL' }
@@ -293,6 +414,8 @@ bun run start
 PENDING_REFERENCE_WORKER_ENABLED é false por padrão. O intervalo aceita de 10 a 60000 ms, e o lote de 1 a 100 transações. HTTP_ENABLED, SQS_CONSUMER_ENABLED e OUTBOX_PUBLISHER_ENABLED continuam controlando os outros componentes. Para executar todos juntos, habilite os quatro flags. Para executar somente referências pendentes, use HTTP_ENABLED=false e mantenha consumer e publisher desligados. Em NODE_ENV=test, os três workers exigem inicialização explícita pelos testes.
 
 O worker busca PENDING_REFERENCE com nextAttemptAt vencido ou ausente e também pendências cujo TTL já expirou. Cada candidato passa pelo ReprocessPendingReferenceUseCase existente. A operação bloqueia a wallet e relê estado e agendamento antes de aplicar qualquer transição. Referência ainda ausente mantém o backoff existente de 1s, 2s, 4s e assim por diante, limitado a 60s. Cinco tentativas totais incluem a submissão inicial. O TTL é de 24 horas desde a criação. Esgotamento ou expiração gera REJECTED com REFERENCE_NOT_FOUND e evento na outbox.
+
+O limite de tentativas pode ser atingido muito antes do TTL: as 24 horas são um teto de idade, não uma promessa de espera mínima. No teste manual relatado, uma BET enviada cerca de 36 segundos após o REFUND chegou quando a pendência já havia sido rejeitada por esgotamento. A BET não reabre esse estado terminal. Em outro cenário, com cerca de oito segundos de intervalo, o worker resolveu o REFUND automaticamente após a BET. Esses intervalos são observações da sessão, não garantias de latência. Para repetir, crie novas identidades e envie a referência antes do esgotamento.
 
 Agendamento e tentativas ficam no PostgreSQL. Ao reiniciar, uma nova instância consulta as pendências persistidas. Falhas transitórias preservam rollback e permitem recuperação posterior. O shutdown interrompe novas buscas e drena ou cancela cooperativamente a rodada antes do fechamento do DataSource, usando os deadlines dos workers existentes.
 
@@ -374,6 +497,30 @@ As famílias incluem wager_transactions_total, wager_replays_total, wager_identi
 
 Gauges consultam PostgreSQL e SQS durante o scrape, incluindo wager_outbox_pending_events, wager_outbox_oldest_pending_age_seconds, wager_reference_pending_transactions e wager_sqs_dlq_messages. Esses valores representam recursos compartilhados e aparecem com scope=shared, devendo ser deduplicados ao consultar várias instâncias. Os flags wager_metrics_database_collection_success e wager_metrics_sqs_collection_success indicam o sucesso da coleta daquela instância. Em falha, os últimos gauges conhecidos são preservados e os contadores continuam disponíveis com HTTP 200. Nenhum identificador financeiro é label. A consolidação pode ser feita futuramente por um coletor Prometheus externo.
 
+Não some indiscriminadamente os gauges scope=shared das três instâncias: eles observam o mesmo banco/broker e podem refletir instantes diferentes. Quantidades de mensagens SQS, inclusive o gauge de DLQ, são aproximadas; zero em um scrape não substitui uma verificação de processamento. Contadores e histogramas são locais por instância e reiniciam com o processo; ao agregá-los, considere reinícios e a semântica de tentativas/replays, em vez de interpretar a soma como total único de transações financeiras.
+
+Inbox/outbox oferecem entrega at-least-once. Os consumidores dos eventos de saída precisam deduplicar persistentemente por eventId. A ordem global de publicação não é garantida: publishers concorrentes usam SKIP LOCKED e podem ultrapassar eventos bloqueados, inclusive do mesmo agregado. FIFO ordena o que o broker recebe por grupo, sem impor uma ordem causal global da outbox.
+
+## Evidências da demonstração manual final
+
+Resultados relatados pelo responsável durante a sessão de testes manuais nas três instâncias; não são uma nova execução automatizada desta revisão. Os IDs locais dos testes não foram incorporados à collection/environment.
+
+| Cenário manual | Resultado relatado |
+| --- | --- |
+| Fluxo financeiro principal | Saldo inicial e final 1000.00 BRL, com operações e reconciliação consistentes. |
+| Replay entre instâncias | Resultado original reproduzido sem débito/crédito duplicado. |
+| Ledger paginado | Páginas com 2, 2 e 1 registros; cursor de outra wallet rejeitado. |
+| Referência fora de ordem | REFUND resolvido automaticamente após BET no cenário com cerca de oito segundos; no cenário de cerca de 36 segundos, o REFUND já havia sido rejeitado por esgotamento. |
+| BET 50.00 por SQS em wallet de 1000.00 | Duas mensagens distintas na inbox, uma transação financeira, um débito, dois eventos publicados (WagerTransactionProcessed e WalletBalanceChanged) e saldo final 950.00. Eventos/lançamento de OPENING não estão incluídos nesses números incrementais. |
+| Envelope inválido | Encaminhamento à DLQ na primeira tentativa. |
+| Distribuição e diagnóstico | Processamento e publicação entre três instâncias, com logs correlacionados e inspeção de inbox, outbox, DLQ, reconciliação e métricas. |
+
+As nove provas distribuídas aprovadas anteriormente continuam registradas na seção seguinte e em ARCHITECTURE.md. Não houve reexecução da suíte completa ou dos cenários distribuídos, nem atualização da contagem de testes nesta revisão documental.
+
+## Arquivos da entrega
+
+Versione documentação, collection/environment Postman reutilizáveis, fontes, testes, scripts, migrations, configurações, `.env.example` e `bun.lock`. Não versione `.env`, credenciais, logs, bancos/volumes, node_modules, dist, coverage, artefatos em tmp/temp ou `message.json` da sessão manual. As regras de ignore preservam esses arquivos localmente; não são comandos de remoção. Antes do commit final, revise `git status --short` e `git diff --check`, além dos arquivos Postman ainda não rastreados. Não use inclusão indiscriminada de artefatos de teste.
+
 ## Testes distribuídos e resultados históricos
 
 Use Bun 1.4.4, Docker Compose acessível pelo host e `.env` configurado conforme `.env.example`. PostgreSQL e LocalStack devem estar saudáveis, assim como as três aplicações nas portas 3001–3003. O usuário PostgreSQL local precisa de permissão para criar o banco exclusivo da execução. Execute separadamente da suíte local completa.
@@ -399,6 +546,8 @@ A execução `20194d68-d451-4f2a-9901-9be48c430a1f` aprovou A, B, C, D, E1, E2, 
 Uma primeira execução aprovou A/B e parou por erro de leitura do PID no script, corrigido antes da repetição integral. Os diagnósticos estão preservados nos logs. Os detalhes por cenário, IDs dos containers/PIDs e limitações estão em `ARCHITECTURE.md`. Os cenários distribuídos obrigatórios da seção 13 estão comprovados. A causa dos timeouts intermitentes de SQS/readiness das etapas anteriores continua inconclusiva. Esta execução usou os serviços preservados, sem avaliar persistência do LocalStack após sua recriação.
 
 As validações locais da etapa passaram com 356 testes unitários/1.110 assertions e 146 testes de integração/888 assertions. bun test aprovou os 502 testes e 1.998 assertions, preservando os 498 existentes. Build, typecheck, lint, Prettier dos TypeScript alterados e git diff --check passaram. A suíte local foi executada com as aplicações temporariamente paradas para reduzir disputa por recursos.
+
+Na validação final em Windows/Docker Desktop, o escritor dos controles recebeu retry limitado de rename para EPERM/EBUSY/EACCES, temporários exclusivos e ordenação por caminho. A substituição continua atômica; cenários, assertions e timeouts foram preservados. A execução `11b97e9e-b8b9-4846-ac6f-611c4044927a` passou A/B/C/F/E1/E2/D/G/H com 1.208 assertions e normalConfigurationRestored=true. A execução anterior com EPERM e seus recursos/evidências foram mantidos. Detalhes da correção e dos testes direcionados estão em ARCHITECTURE.md; nenhuma nova contagem da suíte convencional é inferida desse resultado.
 
 ## Limpeza segura dos recursos exclusivos dos testes distribuídos
 

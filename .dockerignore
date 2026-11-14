@@ -15,5 +15,6 @@ logs
 .vscode
 tmp
 temp
+message.json
 test
 scripts

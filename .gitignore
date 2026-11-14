@@ -28,3 +28,9 @@ Thumbs.db
 # Temporary files
 /tmp
 /temp
+/message.json
+
+# Local credentials and agent state
+/.aws
+/.codex
+/.agents

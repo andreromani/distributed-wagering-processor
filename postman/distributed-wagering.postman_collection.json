@@ -1,0 +1,2039 @@
+{
+  "info": {
+    "name": "Distributed Wagering — Demonstração financeira",
+    "description": "Execute manualmente em ordem 01→06 com o environment Local selecionado. 02, 04 e 05 criam identidades novas em cada execução; 03 depende de 02 e 06 de 03. Não use iterações concorrentes compartilhando o mesmo environment. Somente HTTP local, sem autenticação (guard no-op). No Runner, uma iteração e delay de 1000ms; a pasta 05 limita seu polling. Executar cria registros financeiros permanentes; nenhuma requisição apaga dados. SQS é demonstrado separadamente pelos comandos do README.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "noauth"
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "pm.request.headers.upsert({key:'x-correlation-id',value:pm.variables.replaceIn('{{$guid}}')});"
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "pm.test(\"Correlação e instância disponíveis\", function () { pm.expect(pm.response.headers.get('x-correlation-id')).to.be.a('string').and.not.empty; pm.expect(pm.response.headers.get('x-instance-id')).to.be.a('string').and.not.empty; });"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "01 — Health e métricas",
+      "description": "Pode ser executada independentemente; requer as três aplicações do Compose saudáveis.",
+      "item": [
+        {
+          "name": "1. Liveness — instância 1",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/health/live",
+            "description": "Verifica que o processo está vivo."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"body.status = ok\", function () { pm.expect(body.status).to.eql(\"ok\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2. Readiness — instância 1",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/health/ready",
+            "description": "Verifica PostgreSQL e filas SQS alcançáveis."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"body.status = ok\", function () { pm.expect(body.status).to.eql(\"ok\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3. Liveness — instância 2",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl2}}/health/live",
+            "description": "Verifica que o processo está vivo."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"body.status = ok\", function () { pm.expect(body.status).to.eql(\"ok\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4. Readiness — instância 2",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl2}}/health/ready",
+            "description": "Verifica PostgreSQL e filas SQS alcançáveis."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"body.status = ok\", function () { pm.expect(body.status).to.eql(\"ok\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "5. Liveness — instância 3",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl3}}/health/live",
+            "description": "Verifica que o processo está vivo."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"body.status = ok\", function () { pm.expect(body.status).to.eql(\"ok\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "6. Readiness — instância 3",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl3}}/health/ready",
+            "description": "Verifica PostgreSQL e filas SQS alcançáveis."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"body.status = ok\", function () { pm.expect(body.status).to.eql(\"ok\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "7. Métricas Prometheus",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/metrics",
+            "description": "Confere as famílias operacionais, incluindo idade do evento pendente mais antigo."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Métricas mínimas presentes\", function () { const text = pm.response.text(); ['wager_transactions_total','wager_replays_total','wager_sqs_retries_total','wager_sqs_dlq_messages','wager_sql_lock_conflicts_total','wager_outbox_oldest_pending_age_seconds','wager_processing_duration_seconds'].forEach(name => pm.expect(text).to.include(name)); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "02 — Wallet",
+      "description": "Comece uma nova demonstração pela criação. Ela regenera todas as identidades do fluxo principal; requisições seguintes usam as variáveis capturadas.",
+      "item": [
+        {
+          "name": "1. Criar wallet principal — iniciar nova execução",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/wallets",
+            "description": "Inicia uma execução independente com jogador e identidades novos; gera OPENING e crédito no ledger.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"playerId\": \"{{playerId}}\",\n  \"initialBalance\": {\n    \"amount\": \"1000.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const guid = () => pm.variables.replaceIn('{{$guid}}');",
+                  "pm.environment.set('playerId', guid());",
+                  "pm.environment.set('providerId', 'postman-' + guid());",
+                  "pm.environment.set('roundId', 'round-' + guid());",
+                  "pm.environment.unset('walletId');",
+                  "pm.environment.set('betExternalTransactionId', guid());",
+                  "pm.environment.set('betIdempotencyKey', pm.environment.get('providerId') + ':' + pm.environment.get('betExternalTransactionId'));",
+                  "pm.environment.set('winExternalTransactionId', guid());",
+                  "pm.environment.set('winIdempotencyKey', pm.environment.get('providerId') + ':' + pm.environment.get('winExternalTransactionId'));",
+                  "pm.environment.set('lossExternalTransactionId', guid());",
+                  "pm.environment.set('lossIdempotencyKey', pm.environment.get('providerId') + ':' + pm.environment.get('lossExternalTransactionId'));",
+                  "pm.environment.set('refundExternalTransactionId', guid());",
+                  "pm.environment.set('refundIdempotencyKey', pm.environment.get('providerId') + ':' + pm.environment.get('refundExternalTransactionId'));",
+                  "pm.environment.set('rollbackExternalTransactionId', guid());",
+                  "pm.environment.set('rollbackIdempotencyKey', pm.environment.get('providerId') + ':' + pm.environment.get('rollbackExternalTransactionId'));",
+                  "pm.environment.unset('betTransactionId'); pm.environment.unset('winTransactionId'); pm.environment.unset('ledgerCursor'); pm.environment.unset('ledgerPageIds');"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 201\", function () { pm.response.to.have.status(201); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"Saldo decimal exato 1000.00 BRL\", function () { pm.expect(body.balance.amount).to.be.a('string').and.match(/^(0|[1-9]\\d*)\\.\\d{2}$/); pm.expect(body.balance).to.eql({amount:\"1000.00\",currency:'BRL'}); });",
+                  "pm.test(\"body.version = 1\", function () { pm.expect(body.version).to.eql(1); });",
+                  "if (pm.response.code < 300 && body.id) { pm.environment.set(\"walletId\", body.id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2. Consultar wallet principal",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/wallets/{{walletId}}",
+            "description": "Consulta o saldo atual da wallet deste fluxo."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get(\"walletId\")) { throw new Error('Execute primeiro a requisição que inicializa walletId'); }",
+                  ""
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"Saldo decimal exato 1000.00 BRL\", function () { pm.expect(body.balance.amount).to.be.a('string').and.match(/^(0|[1-9]\\d*)\\.\\d{2}$/); pm.expect(body.balance).to.eql({amount:\"1000.00\",currency:'BRL'}); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3. Ledger de abertura — um crédito OPENING",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/wallets/{{walletId}}/ledger?limit=100",
+            "description": "Consulta o ledger completo deste fluxo pequeno: LOSS e rejeições não geram lançamento."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get(\"walletId\")) { throw new Error('Execute primeiro a requisição que inicializa walletId'); }",
+                  ""
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"Ledger esperado, sem duplicatas\", function () { pm.expect(body.items).to.have.lengthOf(1); pm.expect(new Set(body.items.map(e => e.id)).size).to.eql(1); pm.expect(body.nextCursor).to.eql(null); body.items.forEach(e => { pm.expect(e.money.amount).to.be.a('string'); pm.expect(e.balanceAfter.amount).to.be.a('string'); }); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4. Wallet duplicada — 409",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/wallets",
+            "description": "Repete player/moeda da criação e espera WALLET_CONFLICT, sem nova abertura.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"playerId\": \"{{playerId}}\",\n  \"initialBalance\": {\n    \"amount\": \"1000.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get(\"walletId\")) { throw new Error('Execute primeiro a requisição que inicializa walletId'); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 409\", function () { pm.response.to.have.status(409); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"body.code = WALLET_CONFLICT\", function () { pm.expect(body.code).to.eql(\"WALLET_CONFLICT\"); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "03 — Fluxo financeiro principal",
+      "description": "Execute após 02, em ordem. Saldos: 1000 → 900 → 900 → 1100 → 1100 → 1200 → 1000. O ledger final contém cinco lançamentos.",
+      "item": [
+        {
+          "name": "1. BET 100.00 — saldo 900.00",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{betIdempotencyKey}}"
+              }
+            ],
+            "url": "{{baseUrl}}/wagering/transactions",
+            "description": "Demonstra BET. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"{{providerId}}\",\n  \"externalTransactionId\": \"{{betExternalTransactionId}}\",\n  \"playerId\": \"{{playerId}}\",\n  \"walletId\": \"{{walletId}}\",\n  \"roundId\": \"{{roundId}}\",\n  \"gameId\": \"{{gameId}}\",\n  \"kind\": \"BET\",\n  \"money\": {\n    \"amount\": \"100.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get(\"walletId\")) { throw new Error('Execute primeiro a requisição que inicializa walletId'); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"body.status = PROCESSED\", function () { pm.expect(body.status).to.eql(\"PROCESSED\"); });",
+                  "pm.test(\"body.idempotentReplay = false\", function () { pm.expect(body.idempotentReplay).to.eql(false); });",
+                  "pm.test(\"Saldo decimal exato 900.00 BRL\", function () { pm.expect(body.balance.amount).to.be.a('string').and.match(/^(0|[1-9]\\d*)\\.\\d{2}$/); pm.expect(body.balance).to.eql({amount:\"900.00\",currency:'BRL'}); });",
+                  "if (pm.response.code < 300 && body.transactionId) { pm.environment.set(\"betTransactionId\", body.transactionId); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2. Replay BET na instância 2 — saldo original 900.00",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{betIdempotencyKey}}"
+              }
+            ],
+            "url": "{{baseUrl2}}/wagering/transactions",
+            "description": "Reenvia a mesma chave e payload, reproduzindo o snapshot original. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"{{providerId}}\",\n  \"externalTransactionId\": \"{{betExternalTransactionId}}\",\n  \"playerId\": \"{{playerId}}\",\n  \"walletId\": \"{{walletId}}\",\n  \"roundId\": \"{{roundId}}\",\n  \"gameId\": \"{{gameId}}\",\n  \"kind\": \"BET\",\n  \"money\": {\n    \"amount\": \"100.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get(\"walletId\")) { throw new Error('Execute primeiro a requisição que inicializa walletId'); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"body.status = PROCESSED\", function () { pm.expect(body.status).to.eql(\"PROCESSED\"); });",
+                  "pm.test(\"body.idempotentReplay = true\", function () { pm.expect(body.idempotentReplay).to.eql(true); });",
+                  "pm.test(\"Saldo decimal exato 900.00 BRL\", function () { pm.expect(body.balance.amount).to.be.a('string').and.match(/^(0|[1-9]\\d*)\\.\\d{2}$/); pm.expect(body.balance).to.eql({amount:\"900.00\",currency:'BRL'}); });",
+                  "pm.test(\"Reproduz a mesma transação\", function () { pm.expect(body.transactionId).to.eql(pm.environment.get('betTransactionId')); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3. WIN 200.00 referenciando BET — saldo 1100.00",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{winIdempotencyKey}}"
+              }
+            ],
+            "url": "{{baseUrl}}/wagering/transactions",
+            "description": "Demonstra WIN com referência/contexto compatível. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"{{providerId}}\",\n  \"externalTransactionId\": \"{{winExternalTransactionId}}\",\n  \"playerId\": \"{{playerId}}\",\n  \"walletId\": \"{{walletId}}\",\n  \"roundId\": \"{{roundId}}\",\n  \"gameId\": \"{{gameId}}\",\n  \"kind\": \"WIN\",\n  \"money\": {\n    \"amount\": \"200.00\",\n    \"currency\": \"BRL\"\n  },\n  \"referenceExternalTransactionId\": \"{{betExternalTransactionId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get(\"walletId\")) { throw new Error('Execute primeiro a requisição que inicializa walletId'); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"body.status = PROCESSED\", function () { pm.expect(body.status).to.eql(\"PROCESSED\"); });",
+                  "pm.test(\"body.idempotentReplay = false\", function () { pm.expect(body.idempotentReplay).to.eql(false); });",
+                  "pm.test(\"Saldo decimal exato 1100.00 BRL\", function () { pm.expect(body.balance.amount).to.be.a('string').and.match(/^(0|[1-9]\\d*)\\.\\d{2}$/); pm.expect(body.balance).to.eql({amount:\"1100.00\",currency:'BRL'}); });",
+                  "if (pm.response.code < 300 && body.transactionId) { pm.environment.set(\"winTransactionId\", body.transactionId); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4. LOSS 0.00 — saldo inalterado 1100.00",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{lossIdempotencyKey}}"
+              }
+            ],
+            "url": "{{baseUrl}}/wagering/transactions",
+            "description": "Demonstra LOSS. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"{{providerId}}\",\n  \"externalTransactionId\": \"{{lossExternalTransactionId}}\",\n  \"playerId\": \"{{playerId}}\",\n  \"walletId\": \"{{walletId}}\",\n  \"roundId\": \"{{roundId}}\",\n  \"gameId\": \"{{gameId}}\",\n  \"kind\": \"LOSS\",\n  \"money\": {\n    \"amount\": \"0.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get(\"walletId\")) { throw new Error('Execute primeiro a requisição que inicializa walletId'); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"body.status = PROCESSED\", function () { pm.expect(body.status).to.eql(\"PROCESSED\"); });",
+                  "pm.test(\"body.idempotentReplay = false\", function () { pm.expect(body.idempotentReplay).to.eql(false); });",
+                  "pm.test(\"Saldo decimal exato 1100.00 BRL\", function () { pm.expect(body.balance.amount).to.be.a('string').and.match(/^(0|[1-9]\\d*)\\.\\d{2}$/); pm.expect(body.balance).to.eql({amount:\"1100.00\",currency:'BRL'}); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "5. REFUND integral BET 100.00 — saldo 1200.00",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{refundIdempotencyKey}}"
+              }
+            ],
+            "url": "{{baseUrl}}/wagering/transactions",
+            "description": "Demonstra REFUND com referência/contexto compatível. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"{{providerId}}\",\n  \"externalTransactionId\": \"{{refundExternalTransactionId}}\",\n  \"playerId\": \"{{playerId}}\",\n  \"walletId\": \"{{walletId}}\",\n  \"roundId\": \"{{roundId}}\",\n  \"gameId\": \"{{gameId}}\",\n  \"kind\": \"REFUND\",\n  \"money\": {\n    \"amount\": \"100.00\",\n    \"currency\": \"BRL\"\n  },\n  \"referenceExternalTransactionId\": \"{{betExternalTransactionId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get(\"walletId\")) { throw new Error('Execute primeiro a requisição que inicializa walletId'); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"body.status = PROCESSED\", function () { pm.expect(body.status).to.eql(\"PROCESSED\"); });",
+                  "pm.test(\"body.idempotentReplay = false\", function () { pm.expect(body.idempotentReplay).to.eql(false); });",
+                  "pm.test(\"Saldo decimal exato 1200.00 BRL\", function () { pm.expect(body.balance.amount).to.be.a('string').and.match(/^(0|[1-9]\\d*)\\.\\d{2}$/); pm.expect(body.balance).to.eql({amount:\"1200.00\",currency:'BRL'}); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "6. ROLLBACK integral WIN 200.00 — saldo 1000.00",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{rollbackIdempotencyKey}}"
+              }
+            ],
+            "url": "{{baseUrl3}}/wagering/transactions",
+            "description": "Demonstra ROLLBACK com referência/contexto compatível. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"{{providerId}}\",\n  \"externalTransactionId\": \"{{rollbackExternalTransactionId}}\",\n  \"playerId\": \"{{playerId}}\",\n  \"walletId\": \"{{walletId}}\",\n  \"roundId\": \"{{roundId}}\",\n  \"gameId\": \"{{gameId}}\",\n  \"kind\": \"ROLLBACK\",\n  \"money\": {\n    \"amount\": \"200.00\",\n    \"currency\": \"BRL\"\n  },\n  \"referenceExternalTransactionId\": \"{{winExternalTransactionId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get(\"walletId\")) { throw new Error('Execute primeiro a requisição que inicializa walletId'); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"body.status = PROCESSED\", function () { pm.expect(body.status).to.eql(\"PROCESSED\"); });",
+                  "pm.test(\"body.idempotentReplay = false\", function () { pm.expect(body.idempotentReplay).to.eql(false); });",
+                  "pm.test(\"Saldo decimal exato 1000.00 BRL\", function () { pm.expect(body.balance.amount).to.be.a('string').and.match(/^(0|[1-9]\\d*)\\.\\d{2}$/); pm.expect(body.balance).to.eql({amount:\"1000.00\",currency:'BRL'}); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "7. Consultar BET por ID — snapshot 900.00",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/wagering/transactions/{{betTransactionId}}",
+            "description": "Consulta por transactionId interno capturado; balance é o snapshot original da operação."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get(\"betTransactionId\")) { throw new Error('Execute primeiro a requisição que inicializa betTransactionId'); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"body.status = PROCESSED\", function () { pm.expect(body.status).to.eql(\"PROCESSED\"); });",
+                  "pm.test(\"body.kind = BET\", function () { pm.expect(body.kind).to.eql(\"BET\"); });",
+                  "pm.test(\"Saldo decimal exato 900.00 BRL\", function () { pm.expect(body.balance.amount).to.be.a('string').and.match(/^(0|[1-9]\\d*)\\.\\d{2}$/); pm.expect(body.balance).to.eql({amount:\"900.00\",currency:'BRL'}); });",
+                  "pm.test(\"Mesma identidade interna\", function () { pm.expect(body.transactionId).to.eql(pm.environment.get('betTransactionId')); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "8. Consultar WIN por ID — snapshot 1100.00",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/wagering/transactions/{{winTransactionId}}",
+            "description": "Consulta por transactionId interno capturado; balance é o snapshot original da operação."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get(\"winTransactionId\")) { throw new Error('Execute primeiro a requisição que inicializa winTransactionId'); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"body.status = PROCESSED\", function () { pm.expect(body.status).to.eql(\"PROCESSED\"); });",
+                  "pm.test(\"body.kind = WIN\", function () { pm.expect(body.kind).to.eql(\"WIN\"); });",
+                  "pm.test(\"Saldo decimal exato 1100.00 BRL\", function () { pm.expect(body.balance.amount).to.be.a('string').and.match(/^(0|[1-9]\\d*)\\.\\d{2}$/); pm.expect(body.balance).to.eql({amount:\"1100.00\",currency:'BRL'}); });",
+                  "pm.test(\"Mesma identidade interna\", function () { pm.expect(body.transactionId).to.eql(pm.environment.get('winTransactionId')); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "9. Consultar BET por provider/external ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/providers/{{providerId}}/wagering/transactions/{{betExternalTransactionId}}",
+            "description": "Resolve identidade externa; retorna o mesmo transactionId e snapshot da BET."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get(\"betTransactionId\")) { throw new Error('Execute primeiro a requisição que inicializa betTransactionId'); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"body.status = PROCESSED\", function () { pm.expect(body.status).to.eql(\"PROCESSED\"); });",
+                  "pm.test(\"Saldo decimal exato 900.00 BRL\", function () { pm.expect(body.balance.amount).to.be.a('string').and.match(/^(0|[1-9]\\d*)\\.\\d{2}$/); pm.expect(body.balance).to.eql({amount:\"900.00\",currency:'BRL'}); });",
+                  "pm.test(\"Mesma BET\", function () { pm.expect(body.transactionId).to.eql(pm.environment.get('betTransactionId')); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "10. Consultar WIN por provider/external ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/providers/{{providerId}}/wagering/transactions/{{winExternalTransactionId}}",
+            "description": "Resolve a identidade externa da WIN e preserva seu snapshot anterior ao ROLLBACK."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get(\"winTransactionId\")) { throw new Error('Execute primeiro a requisição que inicializa winTransactionId'); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"body.status = PROCESSED\", function () { pm.expect(body.status).to.eql(\"PROCESSED\"); });",
+                  "pm.test(\"Saldo decimal exato 1100.00 BRL\", function () { pm.expect(body.balance.amount).to.be.a('string').and.match(/^(0|[1-9]\\d*)\\.\\d{2}$/); pm.expect(body.balance).to.eql({amount:\"1100.00\",currency:'BRL'}); });",
+                  "pm.test(\"Mesma WIN\", function () { pm.expect(body.transactionId).to.eql(pm.environment.get('winTransactionId')); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "11. Ledger completo — cinco lançamentos",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/wallets/{{walletId}}/ledger?limit=100",
+            "description": "Consulta o ledger completo deste fluxo pequeno: LOSS e rejeições não geram lançamento."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get(\"walletId\")) { throw new Error('Execute primeiro a requisição que inicializa walletId'); }",
+                  ""
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"Ledger esperado, sem duplicatas\", function () { pm.expect(body.items).to.have.lengthOf(5); pm.expect(new Set(body.items.map(e => e.id)).size).to.eql(5); pm.expect(body.nextCursor).to.eql(null); body.items.forEach(e => { pm.expect(e.money.amount).to.be.a('string'); pm.expect(e.balanceAfter.amount).to.be.a('string'); }); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "12. Reconciliação principal — saldo 1000.00",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/wallets/{{walletId}}/reconciliation",
+            "description": "Compara saldo materializado com o reconstruído pelo ledger, sem corrigir dados."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get(\"walletId\")) { throw new Error('Execute primeiro a requisição que inicializa walletId'); }",
+                  ""
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"Reconciliação exata e consistente\", function () { pm.expect(body.storedBalance).to.eql({amount:'1000.00',currency:'BRL'}); pm.expect(body.calculatedBalance).to.eql(body.storedBalance); pm.expect(body.difference).to.eql({amount:'0.00',currency:'BRL'}); pm.expect(body.consistent).to.eql(true); pm.expect(body.checkedEntries).to.eql(5); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "04 — Idempotência e rejeições",
+      "description": "Wallet independente com 100.00. Execute desde a criação. Após BET 25, crédito 10 e REFUND 25, saldo final 110.00. Falhas não mudam saldo.",
+      "item": [
+        {
+          "name": "1. Criar wallet independente — saldo 100.00",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/wallets",
+            "description": "Inicia uma execução independente com jogador e identidades novos; gera OPENING e crédito no ledger.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"playerId\": \"{{rejectionPlayerId}}\",\n  \"initialBalance\": {\n    \"amount\": \"100.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const guid = () => pm.variables.replaceIn('{{$guid}}');",
+                  "pm.environment.set('rejectionPlayerId', guid());",
+                  "pm.environment.set('rejectionProviderId', 'postman-' + guid());",
+                  "pm.environment.set('rejectionRoundId', 'round-' + guid());",
+                  "pm.environment.unset('rejectionWalletId');",
+                  "pm.environment.set('rejectionBetExternalTransactionId', guid());",
+                  "pm.environment.set('rejectionBetIdempotencyKey', pm.environment.get('rejectionProviderId') + ':' + pm.environment.get('rejectionBetExternalTransactionId'));",
+                  "pm.environment.set('rejectionInsufficientBetExternalTransactionId', guid());",
+                  "pm.environment.set('rejectionInsufficientBetIdempotencyKey', pm.environment.get('rejectionProviderId') + ':' + pm.environment.get('rejectionInsufficientBetExternalTransactionId'));",
+                  "pm.environment.set('rejectionCreditExternalTransactionId', guid());",
+                  "pm.environment.set('rejectionCreditIdempotencyKey', pm.environment.get('rejectionProviderId') + ':' + pm.environment.get('rejectionCreditExternalTransactionId'));",
+                  "pm.environment.set('rejectionRefundExternalTransactionId', guid());",
+                  "pm.environment.set('rejectionRefundIdempotencyKey', pm.environment.get('rejectionProviderId') + ':' + pm.environment.get('rejectionRefundExternalTransactionId'));",
+                  "pm.environment.set('rejectionDuplicateRefundExternalTransactionId', guid());",
+                  "pm.environment.set('rejectionDuplicateRefundIdempotencyKey', pm.environment.get('rejectionProviderId') + ':' + pm.environment.get('rejectionDuplicateRefundExternalTransactionId'));",
+                  "pm.environment.set('rejectionCurrencyExternalTransactionId', guid());",
+                  "pm.environment.set('rejectionCurrencyIdempotencyKey', pm.environment.get('rejectionProviderId') + ':' + pm.environment.get('rejectionCurrencyExternalTransactionId'));",
+                  "pm.environment.set('rejectionNumericExternalTransactionId', guid());",
+                  "pm.environment.set('rejectionNumericIdempotencyKey', pm.environment.get('rejectionProviderId') + ':' + pm.environment.get('rejectionNumericExternalTransactionId'));",
+                  "pm.environment.set('rejectionMissingKeyExternalTransactionId', guid());",
+                  "pm.environment.set('rejectionMissingKeyIdempotencyKey', pm.environment.get('rejectionProviderId') + ':' + pm.environment.get('rejectionMissingKeyExternalTransactionId'));",
+                  "pm.environment.set('rejectionAlternativeKey', 'alternative-' + guid()); pm.environment.set('missingWalletId', guid()); pm.environment.unset('rejectedTransactionId'); pm.environment.unset('rejectedSnapshot');"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 201\", function () { pm.response.to.have.status(201); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"Saldo decimal exato 100.00 BRL\", function () { pm.expect(body.balance.amount).to.be.a('string').and.match(/^(0|[1-9]\\d*)\\.\\d{2}$/); pm.expect(body.balance).to.eql({amount:\"100.00\",currency:'BRL'}); });",
+                  "pm.test(\"body.version = 1\", function () { pm.expect(body.version).to.eql(1); });",
+                  "if (pm.response.code < 300 && body.id) { pm.environment.set(\"rejectionWalletId\", body.id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2. BET base 25.00 — saldo 75.00",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{rejectionBetIdempotencyKey}}"
+              }
+            ],
+            "url": "{{baseUrl}}/wagering/transactions",
+            "description": "Demonstra BET. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"{{rejectionProviderId}}\",\n  \"externalTransactionId\": \"{{rejectionBetExternalTransactionId}}\",\n  \"playerId\": \"{{rejectionPlayerId}}\",\n  \"walletId\": \"{{rejectionWalletId}}\",\n  \"roundId\": \"{{rejectionRoundId}}\",\n  \"gameId\": \"{{gameId}}\",\n  \"kind\": \"BET\",\n  \"money\": {\n    \"amount\": \"25.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get(\"rejectionWalletId\")) { throw new Error('Execute primeiro a requisição que inicializa rejectionWalletId'); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"body.status = PROCESSED\", function () { pm.expect(body.status).to.eql(\"PROCESSED\"); });",
+                  "pm.test(\"body.idempotentReplay = false\", function () { pm.expect(body.idempotentReplay).to.eql(false); });",
+                  "pm.test(\"Saldo decimal exato 75.00 BRL\", function () { pm.expect(body.balance.amount).to.be.a('string').and.match(/^(0|[1-9]\\d*)\\.\\d{2}$/); pm.expect(body.balance).to.eql({amount:\"75.00\",currency:'BRL'}); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3. Mesma chave com payload divergente — 409",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{rejectionBetIdempotencyKey}}"
+              }
+            ],
+            "url": "{{baseUrl}}/wagering/transactions",
+            "description": "Espera IDEMPOTENCY_CONFLICT sem novo efeito financeiro.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"{{rejectionProviderId}}\",\n  \"externalTransactionId\": \"{{rejectionBetExternalTransactionId}}\",\n  \"playerId\": \"{{rejectionPlayerId}}\",\n  \"walletId\": \"{{rejectionWalletId}}\",\n  \"roundId\": \"{{rejectionRoundId}}\",\n  \"gameId\": \"{{gameId}}\",\n  \"kind\": \"BET\",\n  \"money\": {\n    \"amount\": \"10.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get(\"rejectionWalletId\")) { throw new Error('Execute primeiro a requisição que inicializa rejectionWalletId'); }",
+                  ""
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 409\", function () { pm.response.to.have.status(409); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"body.code = IDEMPOTENCY_CONFLICT\", function () { pm.expect(body.code).to.eql(\"IDEMPOTENCY_CONFLICT\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4. Mesma identidade externa, outra chave — 409",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{rejectionAlternativeKey}}"
+              }
+            ],
+            "url": "{{baseUrl}}/wagering/transactions",
+            "description": "Espera EXTERNAL_IDENTITY_CONFLICT sem novo efeito financeiro.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"{{rejectionProviderId}}\",\n  \"externalTransactionId\": \"{{rejectionBetExternalTransactionId}}\",\n  \"playerId\": \"{{rejectionPlayerId}}\",\n  \"walletId\": \"{{rejectionWalletId}}\",\n  \"roundId\": \"{{rejectionRoundId}}\",\n  \"gameId\": \"{{gameId}}\",\n  \"kind\": \"BET\",\n  \"money\": {\n    \"amount\": \"25.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get(\"rejectionWalletId\")) { throw new Error('Execute primeiro a requisição que inicializa rejectionWalletId'); }",
+                  ""
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 409\", function () { pm.response.to.have.status(409); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"body.code = EXTERNAL_IDENTITY_CONFLICT\", function () { pm.expect(body.code).to.eql(\"EXTERNAL_IDENTITY_CONFLICT\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "5. BET 100.00 sem saldo — 422",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{rejectionInsufficientBetIdempotencyKey}}"
+              }
+            ],
+            "url": "{{baseUrl}}/wagering/transactions",
+            "description": "Demonstra BET. Resultado esperado: INSUFFICIENT_FUNDS.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"{{rejectionProviderId}}\",\n  \"externalTransactionId\": \"{{rejectionInsufficientBetExternalTransactionId}}\",\n  \"playerId\": \"{{rejectionPlayerId}}\",\n  \"walletId\": \"{{rejectionWalletId}}\",\n  \"roundId\": \"{{rejectionRoundId}}\",\n  \"gameId\": \"{{gameId}}\",\n  \"kind\": \"BET\",\n  \"money\": {\n    \"amount\": \"100.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get(\"rejectionWalletId\")) { throw new Error('Execute primeiro a requisição que inicializa rejectionWalletId'); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 422\", function () { pm.response.to.have.status(422); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"body.status = REJECTED\", function () { pm.expect(body.status).to.eql(\"REJECTED\"); });",
+                  "pm.test(\"body.idempotentReplay = false\", function () { pm.expect(body.idempotentReplay).to.eql(false); });",
+                  "pm.test(\"Saldo decimal exato 75.00 BRL\", function () { pm.expect(body.balance.amount).to.be.a('string').and.match(/^(0|[1-9]\\d*)\\.\\d{2}$/); pm.expect(body.balance).to.eql({amount:\"75.00\",currency:'BRL'}); });",
+                  "pm.test(\"body.failureCode = INSUFFICIENT_FUNDS\", function () { pm.expect(body.failureCode).to.eql(\"INSUFFICIENT_FUNDS\"); });",
+                  "pm.environment.set('rejectedTransactionId', body.transactionId); pm.environment.set('rejectedSnapshot', JSON.stringify(body));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "6. WIN 10.00 — saldo atual 85.00",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{rejectionCreditIdempotencyKey}}"
+              }
+            ],
+            "url": "{{baseUrl}}/wagering/transactions",
+            "description": "Demonstra WIN. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"{{rejectionProviderId}}\",\n  \"externalTransactionId\": \"{{rejectionCreditExternalTransactionId}}\",\n  \"playerId\": \"{{rejectionPlayerId}}\",\n  \"walletId\": \"{{rejectionWalletId}}\",\n  \"roundId\": \"{{rejectionRoundId}}\",\n  \"gameId\": \"{{gameId}}\",\n  \"kind\": \"WIN\",\n  \"money\": {\n    \"amount\": \"10.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get(\"rejectionWalletId\")) { throw new Error('Execute primeiro a requisição que inicializa rejectionWalletId'); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"body.status = PROCESSED\", function () { pm.expect(body.status).to.eql(\"PROCESSED\"); });",
+                  "pm.test(\"body.idempotentReplay = false\", function () { pm.expect(body.idempotentReplay).to.eql(false); });",
+                  "pm.test(\"Saldo decimal exato 85.00 BRL\", function () { pm.expect(body.balance.amount).to.be.a('string').and.match(/^(0|[1-9]\\d*)\\.\\d{2}$/); pm.expect(body.balance).to.eql({amount:\"85.00\",currency:'BRL'}); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "7. Replay BET rejeitada — snapshot original 75.00",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{rejectionInsufficientBetIdempotencyKey}}"
+              }
+            ],
+            "url": "{{baseUrl}}/wagering/transactions",
+            "description": "Reenvia a mesma chave e payload, reproduzindo o snapshot original. Resultado esperado: INSUFFICIENT_FUNDS.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"{{rejectionProviderId}}\",\n  \"externalTransactionId\": \"{{rejectionInsufficientBetExternalTransactionId}}\",\n  \"playerId\": \"{{rejectionPlayerId}}\",\n  \"walletId\": \"{{rejectionWalletId}}\",\n  \"roundId\": \"{{rejectionRoundId}}\",\n  \"gameId\": \"{{gameId}}\",\n  \"kind\": \"BET\",\n  \"money\": {\n    \"amount\": \"100.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get(\"rejectionWalletId\")) { throw new Error('Execute primeiro a requisição que inicializa rejectionWalletId'); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 422\", function () { pm.response.to.have.status(422); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"body.status = REJECTED\", function () { pm.expect(body.status).to.eql(\"REJECTED\"); });",
+                  "pm.test(\"body.idempotentReplay = true\", function () { pm.expect(body.idempotentReplay).to.eql(true); });",
+                  "pm.test(\"Saldo decimal exato 75.00 BRL\", function () { pm.expect(body.balance.amount).to.be.a('string').and.match(/^(0|[1-9]\\d*)\\.\\d{2}$/); pm.expect(body.balance).to.eql({amount:\"75.00\",currency:'BRL'}); });",
+                  "pm.test(\"body.failureCode = INSUFFICIENT_FUNDS\", function () { pm.expect(body.failureCode).to.eql(\"INSUFFICIENT_FUNDS\"); });",
+                  "pm.test(\"Resultado original preservado após crédito\", function () { const original = JSON.parse(pm.environment.get('rejectedSnapshot')); pm.expect(body).to.eql(Object.assign({}, original, {idempotentReplay:true})); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "8. REFUND integral da BET base — saldo 110.00",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{rejectionRefundIdempotencyKey}}"
+              }
+            ],
+            "url": "{{baseUrl}}/wagering/transactions",
+            "description": "Demonstra REFUND com referência/contexto compatível. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"{{rejectionProviderId}}\",\n  \"externalTransactionId\": \"{{rejectionRefundExternalTransactionId}}\",\n  \"playerId\": \"{{rejectionPlayerId}}\",\n  \"walletId\": \"{{rejectionWalletId}}\",\n  \"roundId\": \"{{rejectionRoundId}}\",\n  \"gameId\": \"{{gameId}}\",\n  \"kind\": \"REFUND\",\n  \"money\": {\n    \"amount\": \"25.00\",\n    \"currency\": \"BRL\"\n  },\n  \"referenceExternalTransactionId\": \"{{rejectionBetExternalTransactionId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get(\"rejectionWalletId\")) { throw new Error('Execute primeiro a requisição que inicializa rejectionWalletId'); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"body.status = PROCESSED\", function () { pm.expect(body.status).to.eql(\"PROCESSED\"); });",
+                  "pm.test(\"body.idempotentReplay = false\", function () { pm.expect(body.idempotentReplay).to.eql(false); });",
+                  "pm.test(\"Saldo decimal exato 110.00 BRL\", function () { pm.expect(body.balance.amount).to.be.a('string').and.match(/^(0|[1-9]\\d*)\\.\\d{2}$/); pm.expect(body.balance).to.eql({amount:\"110.00\",currency:'BRL'}); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "9. Segunda REFUND, nova identidade — 422",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{rejectionDuplicateRefundIdempotencyKey}}"
+              }
+            ],
+            "url": "{{baseUrl}}/wagering/transactions",
+            "description": "Demonstra REFUND com referência/contexto compatível. Resultado esperado: INVALID_REFERENCE.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"{{rejectionProviderId}}\",\n  \"externalTransactionId\": \"{{rejectionDuplicateRefundExternalTransactionId}}\",\n  \"playerId\": \"{{rejectionPlayerId}}\",\n  \"walletId\": \"{{rejectionWalletId}}\",\n  \"roundId\": \"{{rejectionRoundId}}\",\n  \"gameId\": \"{{gameId}}\",\n  \"kind\": \"REFUND\",\n  \"money\": {\n    \"amount\": \"25.00\",\n    \"currency\": \"BRL\"\n  },\n  \"referenceExternalTransactionId\": \"{{rejectionBetExternalTransactionId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get(\"rejectionWalletId\")) { throw new Error('Execute primeiro a requisição que inicializa rejectionWalletId'); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 422\", function () { pm.response.to.have.status(422); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"body.status = REJECTED\", function () { pm.expect(body.status).to.eql(\"REJECTED\"); });",
+                  "pm.test(\"body.idempotentReplay = false\", function () { pm.expect(body.idempotentReplay).to.eql(false); });",
+                  "pm.test(\"Saldo decimal exato 110.00 BRL\", function () { pm.expect(body.balance.amount).to.be.a('string').and.match(/^(0|[1-9]\\d*)\\.\\d{2}$/); pm.expect(body.balance).to.eql({amount:\"110.00\",currency:'BRL'}); });",
+                  "pm.test(\"body.failureCode = INVALID_REFERENCE\", function () { pm.expect(body.failureCode).to.eql(\"INVALID_REFERENCE\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "10. Moeda USD em wallet BRL — 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{rejectionCurrencyIdempotencyKey}}"
+              }
+            ],
+            "url": "{{baseUrl}}/wagering/transactions",
+            "description": "Espera CONTEXT_MISMATCH sem novo efeito financeiro.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"{{rejectionProviderId}}\",\n  \"externalTransactionId\": \"{{rejectionCurrencyExternalTransactionId}}\",\n  \"playerId\": \"{{rejectionPlayerId}}\",\n  \"walletId\": \"{{rejectionWalletId}}\",\n  \"roundId\": \"{{rejectionRoundId}}\",\n  \"gameId\": \"{{gameId}}\",\n  \"kind\": \"BET\",\n  \"money\": {\n    \"amount\": \"1.00\",\n    \"currency\": \"USD\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get(\"rejectionWalletId\")) { throw new Error('Execute primeiro a requisição que inicializa rejectionWalletId'); }",
+                  ""
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 400\", function () { pm.response.to.have.status(400); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"body.code = CONTEXT_MISMATCH\", function () { pm.expect(body.code).to.eql(\"CONTEXT_MISMATCH\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "11. Money como number — 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{rejectionNumericIdempotencyKey}}"
+              }
+            ],
+            "url": "{{baseUrl}}/wagering/transactions",
+            "description": "Espera INVALID_INPUT sem novo efeito financeiro.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"{{rejectionProviderId}}\",\n  \"externalTransactionId\": \"{{rejectionNumericExternalTransactionId}}\",\n  \"playerId\": \"{{rejectionPlayerId}}\",\n  \"walletId\": \"{{rejectionWalletId}}\",\n  \"roundId\": \"{{rejectionRoundId}}\",\n  \"gameId\": \"{{gameId}}\",\n  \"kind\": \"BET\",\n  \"money\": {\n    \"amount\": 1,\n    \"currency\": \"BRL\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get(\"rejectionWalletId\")) { throw new Error('Execute primeiro a requisição que inicializa rejectionWalletId'); }",
+                  ""
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 400\", function () { pm.response.to.have.status(400); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"body.code = INVALID_INPUT\", function () { pm.expect(body.code).to.eql(\"INVALID_INPUT\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "12. Sem Idempotency-Key — 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/wagering/transactions",
+            "description": "Espera INVALID_INPUT sem novo efeito financeiro.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"{{rejectionProviderId}}\",\n  \"externalTransactionId\": \"{{rejectionMissingKeyExternalTransactionId}}\",\n  \"playerId\": \"{{rejectionPlayerId}}\",\n  \"walletId\": \"{{rejectionWalletId}}\",\n  \"roundId\": \"{{rejectionRoundId}}\",\n  \"gameId\": \"{{gameId}}\",\n  \"kind\": \"BET\",\n  \"money\": {\n    \"amount\": \"1.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get(\"rejectionWalletId\")) { throw new Error('Execute primeiro a requisição que inicializa rejectionWalletId'); }",
+                  ""
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 400\", function () { pm.response.to.have.status(400); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"body.code = INVALID_INPUT\", function () { pm.expect(body.code).to.eql(\"INVALID_INPUT\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "13. Wallet inexistente — 404",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/wallets/{{missingWalletId}}",
+            "description": "UUID novo, sem depender de registro preexistente."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get(\"missingWalletId\")) { throw new Error('Execute primeiro a requisição que inicializa missingWalletId'); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 404\", function () { pm.response.to.have.status(404); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"body.code = WALLET_NOT_FOUND\", function () { pm.expect(body.code).to.eql(\"WALLET_NOT_FOUND\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "14. Confirmar saldo preservado — 110.00",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/wallets/{{rejectionWalletId}}",
+            "description": "Consulta o saldo atual da wallet deste fluxo."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get(\"rejectionWalletId\")) { throw new Error('Execute primeiro a requisição que inicializa rejectionWalletId'); }",
+                  ""
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"Saldo decimal exato 110.00 BRL\", function () { pm.expect(body.balance.amount).to.be.a('string').and.match(/^(0|[1-9]\\d*)\\.\\d{2}$/); pm.expect(body.balance).to.eql({amount:\"110.00\",currency:'BRL'}); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "15. Reconciliação das rejeições",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/wallets/{{rejectionWalletId}}/reconciliation",
+            "description": "Compara saldo materializado com o reconstruído pelo ledger, sem corrigir dados."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get(\"rejectionWalletId\")) { throw new Error('Execute primeiro a requisição que inicializa rejectionWalletId'); }",
+                  ""
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"Reconciliação exata e consistente\", function () { pm.expect(body.storedBalance).to.eql({amount:'110.00',currency:'BRL'}); pm.expect(body.calculatedBalance).to.eql(body.storedBalance); pm.expect(body.difference).to.eql({amount:'0.00',currency:'BRL'}); pm.expect(body.consistent).to.eql(true); pm.expect(body.checkedEntries).to.eql(4); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "05 — Referência fora de ordem",
+      "description": "Wallet independente. Envie REFUND, consulte e envie BET em sequência, sem pausa longa: cinco tentativas totais podem esgotar em aproximadamente 15–20s com o worker padrão. Depois repita a consulta 5 até PROCESSED. No Runner, configure delay de 1000ms; a consulta 5 faz polling limitado a 20 respostas. Send manual exige repetição manual. Worker deve estar habilitado.",
+      "item": [
+        {
+          "name": "1. Criar wallet independente — saldo 100.00",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/wallets",
+            "description": "Inicia uma execução independente com jogador e identidades novos; gera OPENING e crédito no ledger.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"playerId\": \"{{pendingPlayerId}}\",\n  \"initialBalance\": {\n    \"amount\": \"100.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const guid = () => pm.variables.replaceIn('{{$guid}}');",
+                  "pm.environment.set('pendingPlayerId', guid());",
+                  "pm.environment.set('pendingProviderId', 'postman-' + guid());",
+                  "pm.environment.set('pendingRoundId', 'round-' + guid());",
+                  "pm.environment.unset('pendingWalletId');",
+                  "pm.environment.set('pendingBetExternalTransactionId', guid());",
+                  "pm.environment.set('pendingBetIdempotencyKey', pm.environment.get('pendingProviderId') + ':' + pm.environment.get('pendingBetExternalTransactionId'));",
+                  "pm.environment.set('pendingRefundExternalTransactionId', guid());",
+                  "pm.environment.set('pendingRefundIdempotencyKey', pm.environment.get('pendingProviderId') + ':' + pm.environment.get('pendingRefundExternalTransactionId'));",
+                  "pm.environment.set('pendingResolved','false'); pm.environment.set('pendingPollCount','0'); pm.environment.unset('pendingRefundTransactionId');"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 201\", function () { pm.response.to.have.status(201); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"Saldo decimal exato 100.00 BRL\", function () { pm.expect(body.balance.amount).to.be.a('string').and.match(/^(0|[1-9]\\d*)\\.\\d{2}$/); pm.expect(body.balance).to.eql({amount:\"100.00\",currency:'BRL'}); });",
+                  "pm.test(\"body.version = 1\", function () { pm.expect(body.version).to.eql(1); });",
+                  "if (pm.response.code < 300 && body.id) { pm.environment.set(\"pendingWalletId\", body.id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2. REFUND 25.00 antes da BET — 202",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{pendingRefundIdempotencyKey}}"
+              }
+            ],
+            "url": "{{baseUrl}}/wagering/transactions",
+            "description": "Demonstra REFUND com referência/contexto compatível. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"{{pendingProviderId}}\",\n  \"externalTransactionId\": \"{{pendingRefundExternalTransactionId}}\",\n  \"playerId\": \"{{pendingPlayerId}}\",\n  \"walletId\": \"{{pendingWalletId}}\",\n  \"roundId\": \"{{pendingRoundId}}\",\n  \"gameId\": \"{{gameId}}\",\n  \"kind\": \"REFUND\",\n  \"money\": {\n    \"amount\": \"25.00\",\n    \"currency\": \"BRL\"\n  },\n  \"referenceExternalTransactionId\": \"{{pendingBetExternalTransactionId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get(\"pendingWalletId\")) { throw new Error('Execute primeiro a requisição que inicializa pendingWalletId'); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 202\", function () { pm.response.to.have.status(202); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"body.status = PENDING_REFERENCE\", function () { pm.expect(body.status).to.eql(\"PENDING_REFERENCE\"); });",
+                  "pm.test(\"body.idempotentReplay = false\", function () { pm.expect(body.idempotentReplay).to.eql(false); });",
+                  "if (pm.response.code < 300 && body.transactionId) { pm.environment.set(\"pendingRefundTransactionId\", body.transactionId); }",
+                  "pm.test(\"Pendência sem snapshot terminal\", function () { pm.expect(body).not.to.have.property('balance'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3. Consultar REFUND pendente — enviar BET logo em seguida",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/wagering/transactions/{{pendingRefundTransactionId}}",
+            "description": "Sem a BET, deve continuar PENDING_REFERENCE enquanto não esgotar tentativas. Não pause aqui."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get(\"pendingRefundTransactionId\")) { throw new Error('Execute primeiro a requisição que inicializa pendingRefundTransactionId'); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"body.status = PENDING_REFERENCE\", function () { pm.expect(body.status).to.eql(\"PENDING_REFERENCE\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4. Enviar BET referenciada — saldo observado 75.00",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{pendingBetIdempotencyKey}}"
+              }
+            ],
+            "url": "{{baseUrl}}/wagering/transactions",
+            "description": "Demonstra BET. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"{{pendingProviderId}}\",\n  \"externalTransactionId\": \"{{pendingBetExternalTransactionId}}\",\n  \"playerId\": \"{{pendingPlayerId}}\",\n  \"walletId\": \"{{pendingWalletId}}\",\n  \"roundId\": \"{{pendingRoundId}}\",\n  \"gameId\": \"{{gameId}}\",\n  \"kind\": \"BET\",\n  \"money\": {\n    \"amount\": \"25.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get(\"pendingWalletId\")) { throw new Error('Execute primeiro a requisição que inicializa pendingWalletId'); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"body.status = PROCESSED\", function () { pm.expect(body.status).to.eql(\"PROCESSED\"); });",
+                  "pm.test(\"body.idempotentReplay = false\", function () { pm.expect(body.idempotentReplay).to.eql(false); });",
+                  "pm.test(\"Saldo decimal exato 75.00 BRL\", function () { pm.expect(body.balance.amount).to.be.a('string').and.match(/^(0|[1-9]\\d*)\\.\\d{2}$/); pm.expect(body.balance).to.eql({amount:\"75.00\",currency:'BRL'}); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "5. Consultar REFUND até PROCESSED — repetir se pendente",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/wagering/transactions/{{pendingRefundTransactionId}}",
+            "description": "GET retorna 200 mesmo pendente. Aguarde o backoff e repita. No Runner, delay de 1000ms e no máximo 20 consultas; timeout não é sucesso."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get(\"pendingRefundTransactionId\")) { throw new Error('Execute primeiro a requisição que inicializa pendingRefundTransactionId'); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"Estado recuperável ou processado\", function () { pm.expect(body.status).to.be.oneOf(['PENDING_REFERENCE','PROCESSED']); });",
+                  "const count = Number(pm.environment.get('pendingPollCount') || '0') + 1; pm.environment.set('pendingPollCount', String(count));",
+                  "if (body.status === 'PROCESSED') { pm.environment.set('pendingResolved','true');",
+                  "pm.test(\"Saldo decimal exato 100.00 BRL\", function () { pm.expect(body.balance.amount).to.be.a('string').and.match(/^(0|[1-9]\\d*)\\.\\d{2}$/); pm.expect(body.balance).to.eql({amount:\"100.00\",currency:'BRL'}); });",
+                  "} else { pm.environment.set('pendingResolved','false'); pm.test.skip('Conclusão ainda pendente: aguarde e repita', function () {}); if (body.status === 'PENDING_REFERENCE' && count < 20) { pm.execution.setNextRequest(pm.info.requestId); } else { pm.test('Worker concluiu dentro do limite', function () { pm.expect(body.status).to.eql('PROCESSED'); }); pm.execution.setNextRequest(null); } }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "6. Wallet após resolução — 100.00",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/wallets/{{pendingWalletId}}",
+            "description": "Consulta o saldo atual da wallet deste fluxo."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get(\"pendingWalletId\")) { throw new Error('Execute primeiro a requisição que inicializa pendingWalletId'); }",
+                  "if (pm.environment.get('pendingResolved') !== 'true') { throw new Error('Aguarde e repita a consulta 5 até PROCESSED antes de continuar. Se REJECTED, reinicie esta pasta.'); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"Saldo decimal exato 100.00 BRL\", function () { pm.expect(body.balance.amount).to.be.a('string').and.match(/^(0|[1-9]\\d*)\\.\\d{2}$/); pm.expect(body.balance).to.eql({amount:\"100.00\",currency:'BRL'}); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "7. Ledger após resolução — três lançamentos",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/wallets/{{pendingWalletId}}/ledger?limit=100",
+            "description": "Consulta o ledger completo deste fluxo pequeno: LOSS e rejeições não geram lançamento."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get(\"pendingWalletId\")) { throw new Error('Execute primeiro a requisição que inicializa pendingWalletId'); }",
+                  "if (pm.environment.get('pendingResolved') !== 'true') { throw new Error('Aguarde e repita a consulta 5 até PROCESSED antes de continuar. Se REJECTED, reinicie esta pasta.'); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"Ledger esperado, sem duplicatas\", function () { pm.expect(body.items).to.have.lengthOf(3); pm.expect(new Set(body.items.map(e => e.id)).size).to.eql(3); pm.expect(body.nextCursor).to.eql(null); body.items.forEach(e => { pm.expect(e.money.amount).to.be.a('string'); pm.expect(e.balanceAfter.amount).to.be.a('string'); }); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "8. Reconciliação após resolução",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/wallets/{{pendingWalletId}}/reconciliation",
+            "description": "Compara saldo materializado com o reconstruído pelo ledger, sem corrigir dados."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get(\"pendingWalletId\")) { throw new Error('Execute primeiro a requisição que inicializa pendingWalletId'); }",
+                  "if (pm.environment.get('pendingResolved') !== 'true') { throw new Error('Aguarde e repita a consulta 5 até PROCESSED antes de continuar. Se REJECTED, reinicie esta pasta.'); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"Reconciliação exata e consistente\", function () { pm.expect(body.storedBalance).to.eql({amount:'100.00',currency:'BRL'}); pm.expect(body.calculatedBalance).to.eql(body.storedBalance); pm.expect(body.difference).to.eql({amount:'0.00',currency:'BRL'}); pm.expect(body.consistent).to.eql(true); pm.expect(body.checkedEntries).to.eql(3); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "06 — Paginação do ledger",
+      "description": "Depende de 02 e 03 completas, sem operações extras na wallet principal. Percorre os cinco lançamentos em páginas 2/2/1 e detecta IDs repetidos.",
+      "item": [
+        {
+          "name": "1. Página 1 — 2 lançamentos",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/wallets/{{walletId}}/ledger?limit=2",
+            "description": "Execute após o fluxo 03 completo. O cursor é opaco e os IDs acumulados detectam repetição entre páginas. Para repetir a paginação, recomece pela página 1."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get(\"walletId\")) { throw new Error('Execute primeiro a requisição que inicializa walletId'); }",
+                  "pm.environment.set('ledgerPageIds','[]'); pm.environment.unset('ledgerCursor');"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"Página sem lançamentos repetidos\", function () { pm.expect(body.items).to.have.lengthOf(2); const previous = JSON.parse(pm.environment.get('ledgerPageIds') || '[]'); const ids = body.items.map(e => e.id); pm.expect(new Set(ids).size).to.eql(ids.length); ids.forEach(id => pm.expect(previous).not.to.include(id)); pm.environment.set('ledgerPageIds',JSON.stringify(previous.concat(ids))); });",
+                  "pm.test(\"Captura próximo cursor opaco\", function () { pm.expect(body.nextCursor).to.be.a('string').and.not.empty; pm.environment.set('ledgerCursor',body.nextCursor); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2. Página 2 — 2 lançamentos",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/wallets/{{walletId}}/ledger?limit=2&cursor={{ledgerCursor}}",
+            "description": "Execute após o fluxo 03 completo. O cursor é opaco e os IDs acumulados detectam repetição entre páginas. Para repetir a paginação, recomece pela página 1."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get(\"walletId\")) { throw new Error('Execute primeiro a requisição que inicializa walletId'); }",
+                  "if (!pm.environment.get(\"ledgerCursor\")) { throw new Error('Execute primeiro a requisição que inicializa ledgerCursor'); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"Página sem lançamentos repetidos\", function () { pm.expect(body.items).to.have.lengthOf(2); const previous = JSON.parse(pm.environment.get('ledgerPageIds') || '[]'); const ids = body.items.map(e => e.id); pm.expect(new Set(ids).size).to.eql(ids.length); ids.forEach(id => pm.expect(previous).not.to.include(id)); pm.environment.set('ledgerPageIds',JSON.stringify(previous.concat(ids))); });",
+                  "pm.test(\"Captura próximo cursor opaco\", function () { pm.expect(body.nextCursor).to.be.a('string').and.not.empty; pm.environment.set('ledgerCursor',body.nextCursor); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3. Página 3 — 1 lançamentos",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/wallets/{{walletId}}/ledger?limit=2&cursor={{ledgerCursor}}",
+            "description": "Execute após o fluxo 03 completo. O cursor é opaco e os IDs acumulados detectam repetição entre páginas. Para repetir a paginação, recomece pela página 1."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get(\"walletId\")) { throw new Error('Execute primeiro a requisição que inicializa walletId'); }",
+                  "if (!pm.environment.get(\"ledgerCursor\")) { throw new Error('Execute primeiro a requisição que inicializa ledgerCursor'); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json();",
+                  "pm.test(\"Página sem lançamentos repetidos\", function () { pm.expect(body.items).to.have.lengthOf(1); const previous = JSON.parse(pm.environment.get('ledgerPageIds') || '[]'); const ids = body.items.map(e => e.id); pm.expect(new Set(ids).size).to.eql(ids.length); ids.forEach(id => pm.expect(previous).not.to.include(id)); pm.environment.set('ledgerPageIds',JSON.stringify(previous.concat(ids))); });",
+                  "pm.test(\"Fim: cinco lançamentos únicos\", function () { pm.expect(body.nextCursor).to.eql(null); pm.expect(JSON.parse(pm.environment.get('ledgerPageIds'))).to.have.lengthOf(5); pm.environment.unset('ledgerCursor'); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

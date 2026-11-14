@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { mkdir, readdir, rename } from 'node:fs/promises';
+import { mkdir, readdir } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { DataSource } from 'typeorm';
 import {
@@ -20,6 +20,7 @@ import type { WagerRow } from '../src/infrastructure/database/entities/wager-tra
 import type { OpenWalletResult } from '../src/application/use-cases/open-wallet.use-case.js';
 import type { ProcessWagerResult } from '../src/application/use-cases/process-wager-transaction.use-case.js';
 import type { ReconciliationResult } from '../src/application/use-cases/reconcile-wallet.use-case.js';
+import { atomicJson } from './support/atomic-json.js';
 
 const runId = crypto.randomUUID();
 const database = 'wager_distributed_' + runId.replaceAll('-', '');
@@ -127,11 +128,6 @@ function compose(args: string[], normal = false): Promise<string> {
     ...(normal ? [] : ['-f', override]),
     ...args,
   ]);
-}
-
-async function atomicJson(path: string, value: unknown): Promise<void> {
-  await Bun.write(path + '.next', JSON.stringify(value));
-  await rename(path + '.next', path);
 }
 
 async function control(
@@ -1181,7 +1177,18 @@ try {
 } finally {
   try {
     if (changedContainers) {
-      await Promise.all(apps.map((_, index) => control(index, null)));
+      const disarmed = await Promise.allSettled(
+        apps.map((_, index) => control(index, null)),
+      );
+      for (const result of disarmed) {
+        if (result.status === 'rejected') {
+          failure = new AggregateError(
+            [failure, result.reason].filter(Boolean),
+            'Distributed test barrier cleanup failure',
+          );
+        }
+      }
+
       await compose(
         ['up', '-d', '--no-deps', '--force-recreate', ...apps],
         true,
