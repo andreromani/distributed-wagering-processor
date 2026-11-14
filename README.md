@@ -432,3 +432,29 @@ GET /metrics fornece Prometheus text 0.0.4. Contadores são locais à instância
 As famílias incluem wager_transactions_total, wager_replays_total, wager_identity_conflicts_total, wager_http_requests_total, wager_sql_lock_conflicts_total, wager_sql_transient_failures_total, wager_reconciliation_divergences_total, contadores wager_sqs_*, wager_outbox_* e wager_reference_*. Conflitos SQL contabilizam 40001, 40P01 e 55P03 observados pelo adaptador financeiro. Falhas transitórias SQL são contabilizadas por tentativa desfeita. Os retries de entrega e publicação possuem contadores próprios.
 
 Gauges consultam PostgreSQL e SQS durante o scrape, incluindo wager_outbox_pending_events, wager_outbox_oldest_pending_age_seconds, wager_reference_pending_transactions e wager_sqs_dlq_messages. Esses valores representam recursos compartilhados e aparecem com scope=shared, devendo ser deduplicados ao consultar várias instâncias. Os flags wager_metrics_database_collection_success e wager_metrics_sqs_collection_success indicam o sucesso da coleta daquela instância. Em falha, os últimos gauges conhecidos são preservados e os contadores continuam disponíveis com HTTP 200. Nenhum identificador financeiro é label. A consolidação pode ser feita futuramente por um coletor Prometheus externo.
+
+## Testes distribuídos da Etapa 12
+
+Use Bun 1.4.4, Docker Compose acessível pelo host e `.env` configurado conforme `.env.example`. PostgreSQL e LocalStack devem estar saudáveis, assim como as três aplicações nas portas 3001–3003. O usuário PostgreSQL local precisa de permissão para criar o banco exclusivo da execução. Execute separadamente da suíte local completa.
+
+```powershell
+docker compose config --quiet
+docker compose build migrations
+docker compose up -d --wait
+docker compose ps
+bun run test:distributed
+```
+
+O comando cria `wager_distributed_<uuid>` e três filas FIFO `wager-dist-<uuid>-*`, mantendo esses recursos para auditoria. Usa as três aplicações reais com override temporário em `tmp/distributed-tests/<runId>/compose.test.json`. Banco e filas usuais permanecem preservados. A configuração normal das aplicações é restaurada no finally, seguido de readiness das três APIs. Não execute simultaneamente outras ferramentas que recriem essas aplicações.
+
+Os cenários A–H cobrem três repetições de 50 duplicatas, hot wallet, wallets distintas com evidência de locks SQL, três processos independentes, SIGKILL após commit antes do ACK, dois publishers concorrentes, crash após confirmação do broker, referência fora de ordem, restart e reconciliação de todas as wallets. E1 e E2 detalham as duas provas de publicação, totalizando nove resultados de cenário.
+
+As barreiras exigem `DISTRIBUTED_TEST_HOOKS_ENABLED=true`, diretório montado, runId e IDs de alvos explícitos. Estão desabilitadas por padrão e usam arquivos locais, sem endpoint administrativo. O teste envia SIGKILL a um container real após observar o marcador e o estado persistido. A recuperação ocorre em outra instância. Os limites financeiros existentes são preservados.
+
+Cada cenário emite JSON com resultado, duração, instâncias e identificadores auditáveis. `logs/distributed-tests/<runId>/summary.json` contém o resumo, e `applications.log` preserva o diagnóstico coletado. Esses diretórios são ignorados pelo Git. Falhas retornam exit code 1 e cenários não executados são listados como pendentes. O coletor de evidências confirma payload e eventId antes de fazer ACK exclusivamente na fila de saída isolada desta execução. FIFO pode deduplicar republicações com o mesmo eventId. A garantia de publicação é at-least-once.
+
+A execução `20194d68-d451-4f2a-9901-9be48c430a1f` aprovou A, B, C, D, E1, E2, F, G e H, com 1.208 assertions. As 16 wallets reconciliaram, com 39 lançamentos, 42 transações e 83 eventos publicados e observados. O crash do consumer confirmou commit em app-1, exit 137 e redelivery com replay/ACK em app-2 na tentativa 2, preservando saldo 75.00. Dois publishers comprovaram locks simultâneos em eventos distintos. A recuperação após confirmação do broker preservou o eventId. O restart recuperou mensagem, eventos e referência pendentes, com saldo 110.00. PostgreSQL e LocalStack conservaram seus containers. A configuração normal foi restaurada e as três APIs ficaram prontas.
+
+Uma primeira execução aprovou A/B e parou por erro de leitura do PID no script, corrigido antes da repetição integral. Os diagnósticos estão preservados nos logs. Os detalhes por cenário, IDs dos containers/PIDs e limitações estão em `ARCHITECTURE.md`. Os cenários distribuídos obrigatórios da seção 13 estão comprovados. A causa dos timeouts intermitentes de SQS/readiness das etapas anteriores continua inconclusiva. Esta execução usou os serviços preservados, sem avaliar persistência do LocalStack após sua recriação.
+
+As validações locais da etapa passaram com 356 testes unitários/1.110 assertions e 146 testes de integração/888 assertions. bun test aprovou os 502 testes e 1.998 assertions, preservando os 498 existentes. Build, typecheck, lint, Prettier dos TypeScript alterados e git diff --check passaram. A suíte local foi executada com as aplicações temporariamente paradas para reduzir disputa por recursos.

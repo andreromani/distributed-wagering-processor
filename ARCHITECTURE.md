@@ -500,3 +500,47 @@ O probe de shutdown foi ajustado após deadlines de sincronização e restart. A
 - Uma execução intermediária após o ajuste de healthcheck ainda apresentou readiness 503 em um teste, com 497 aprovados e uma falha. Esse resultado reforça que a causa da instabilidade permanece inconclusiva. Os stacks e diagnósticos foram preservados em logs/stage11-tests-first.log e logs/stage11-tests-second-failure.log.
 
 Não foram adicionadas dependências, versões de migration ou regras financeiras. Permanecem a volatilidade previamente documentada das filas do LocalStack em recriação, a investigação dos timeouts intermitentes e os cenários distribuídos da Etapa 12. A suíte de 50 duplicatas entre processos, hot wallet e crash abrupto não foi implementada nesta etapa.
+
+## Etapa 12 — provas distribuídas
+
+`bun run test:distributed` executa os cenários obrigatórios da seção 13 usando as três aplicações Docker. Cada execução recebe banco PostgreSQL e três filas FIFO próprios, com nomes derivados de UUID. Os recursos financeiros são mantidos para auditoria. O override Compose temporário altera apenas as aplicações e o comando de migrations do banco de teste. Os containers de PostgreSQL e LocalStack permanecem os mesmos, verificados por seus IDs antes e depois. O finally restaura as três aplicações para o banco, filas e flags usuais e verifica readiness.
+
+A suíte controla os workers para construir estados duráveis antes da recuperação. As barreiras de infraestrutura exigem flag explícita, runId, diretório montado por instância e lista exata de IDs. A configuração padrão permanece desabilitada. Arquivos de controle e marcadores são publicados por rename atômico. Os pontos são após commit financeiro antes do ACK, antes do envio de um evento e após confirmação SQS antes da atualização da outbox. Não há endpoint administrativo. Cancelamento e os deadlines existentes continuam aplicáveis.
+
+No crash do consumer, o teste verifica wallet, transação, ledger, inbox confirmada e outbox por outra conexão antes de enviar SIGKILL ao container. Confere exit 137 e ausência de OOM. Apenas depois habilita outra instância para redelivery. Os logs devem confirmar o mesmo SQS MessageId, tentativa pelo menos 2, replay e ACK. O estado financeiro e os IDs/payloads de outbox devem permanecer iguais.
+
+Na publicação concorrente, dois processos ficam simultaneamente nas barreiras com eventos distintos. Um SELECT FOR UPDATE SKIP LOCKED da conexão de teste não consegue selecionar nenhuma das duas linhas, comprovando claims SQL concorrentes. Depois da liberação, todos os eventos devem ter published_at. No segundo caso, SIGKILL após a confirmação do broker desfaz a atualização de metadados da transação SQL aberta. Outra instância republica com o mesmo eventId e payload. FIFO pode suprimir essa cópia. A garantia é at-least-once, com identidade estável.
+
+A prova de wallets distintas mantém uma wallet bloqueada por uma conexão conhecida. pg_stat_activity e pg_blocking_pids identificam a espera em app-1. Duas outras wallets confirmam operações em app-2/app-3 enquanto o primeiro bloqueio continua presente. A asserção usa estado SQL e conclusão das operações antes da liberação do lock.
+
+A reconciliação final lê saldo e ledger por HTTP, consulta as linhas SQL e calcula centavos com bigint. Verifica contagem, versão, unicidade de lançamento por transação, ausência de lançamento nas rejeições e correspondência entre transação processada e efeito contábil. Todas as wallets devem reconciliar. O coletor confirma cada envelope contra a outbox e faz ACK somente na fila exclusiva desta execução. Banco e filas compartilhados permanecem preservados. Logs e summary.json ficam em logs/distributed-tests, ignorados pelo Git.
+
+### Execução distribuída comprovada
+
+Execução `20194d68-d451-4f2a-9901-9be48c430a1f`, Bun 1.4.4, PostgreSQL 16.11 e LocalStack 4.14.0. Foram nove resultados PASS, zero FAIL e 1.208 assertions próprias do script. O banco mantido é `wager_distributed_20194d68d4514f2a99019be48c430a1f`.
+
+| Cenário | Resultado observado |
+| --- | --- |
+| A | Três repetições de 50 envios pelas três APIs, uma operação original e 49 replays por repetição, saldo 75.00, versão 2, dois lançamentos e quatro eventos por wallet. |
+| B | Duas BET 80.00 sobre 100.00 produziram uma aprovação e uma rejeição, saldo 20.00. Doze BET 10.00 produziram dez aprovações e duas rejeições, saldo 0.00, onze lançamentos. |
+| C | Duas wallets confirmaram com a terceira bloqueada por PID conhecido, seguido de liberação e saldo 90.00 nas três. |
+| D | Commit em app-1, SIGKILL exit 137, redelivery da mesma mensagem em app-2 na tentativa 2 com replay e ACK. Saldo 75.00, versão 2, dois lançamentos, uma inbox confirmada e quatro eventos. |
+| E1 | App-1/app-2 seguraram simultaneamente eventos distintos. SKIP LOCKED confirmou ambas as linhas ocupadas. Os 68 eventos acumulados foram publicados. |
+| E2 | Evento 83363251-2235-4e32-8df4-212c90362bdf confirmado no broker em app-1 antes de published_at, SIGKILL e publicação por app-2 com identidade preservada. |
+| F | REFUND inicialmente pendente em app-1, BET em app-2, resolução automática por app-1 na tentativa 2 e replay em app-3. Saldo 100.00, três lançamentos e sete eventos. |
+| G | Mensagem SQS, eventos e referência pendentes sobreviveram ao stop/restart. BET em outra instância enquanto app-1 estava parada. Saldo final 110.00, versão 4, quatro lançamentos e nove eventos. |
+| H | Dezesseis wallets consistentes, 39 lançamentos, 42 transações e 83 eventos publicados/observados com payload e identidade conferidos. Três rejeições sem efeito contábil. |
+
+Os containers iniciais foram ce6203ac00fe/PID Linux 46746 em app-1, c0f90f3e4c79/PID 46826 em app-2 e 27ecc4877670/PID 46668 em app-3. Todos usaram processos Bun independentes. No cenário D, messageId b4679f6e-3866-4cf2-b1cf-c3ff8daa036d e SQS MessageId 5530ea1b-c589-451a-9c97-83d9f593e5cc identificam o commit/replay. A transação d72541a5-e990-493d-a053-18b286f02d84 permaneceu única. O resumo confirmou restauração da configuração normal e readiness das três APIs.
+
+A primeira execução parou após A/B aprovados por erro do script ao tratar o retorno de QueryRunner.query como QueryResult. A consulta do PID foi corrigida para runner.manager.query, seguindo o probe existente. O stack e o resumo dessa execução estão preservados em logs/stage12-distributed-first.log e no diretório de execução 9a65faa5-1f43-4e76-a566-4b36e4b7138d. Esse erro foi classificado como falha do teste. A repetição integral comprovou os nove resultados acima.
+
+Os testes unitários das barreiras encontraram leitura de marcador ainda incompleto e cache de tamanho de Bun.file criado antes do arquivo. O marcador passou a usar rename atômico, e o teste passou a abrir o arquivo após sua publicação. O build Docker apresentou instalação e compilação lentas, com memória disponível ao Docker de aproximadamente 3,6 GiB. As aplicações foram temporariamente paradas para reduzir disputa durante a compilação e as validações locais. Os limites das operações financeiras permaneceram iguais.
+
+Todos os oito cenários distribuídos da seção 13 foram comprovados nesta etapa, com a prova de publicação detalhada em E1/E2. A cobertura local anterior de unidade e integração continua necessária para migrations, constraints, atomicidade, retry e DLQ. A volatilidade do LocalStack em recriação e a origem dos timeouts intermitentes anteriores continuam limitações conhecidas. O sucesso desta execução não estabelece causa ou resolução desses timeouts. A execução exige acesso Docker e permissão local de CREATE DATABASE. Os recursos de auditoria retidos consomem espaço a cada execução.
+
+### Validações locais da Etapa 12
+
+Build, typecheck e lint passaram. test:unit aprovou 356 testes e 1.110 assertions. test:integration aprovou 146 testes e 888 assertions com PostgreSQL/LocalStack reais. bun test aprovou 502 testes, zero falhas e 1.998 assertions em 18 arquivos. Os 498 testes existentes foram preservados e quatro testes unitários das barreiras foram adicionados. Essas contagens são distintas das nove provas distribuídas com 1.208 assertions próprias.
+
+As suítes local e distribuída foram executadas em momentos separados. Durante a suíte local, somente as aplicações estavam paradas. As validações individuais e a execução agregada passaram na primeira execução desta etapa. Lint adicional do script distribuído, Prettier dos seis TypeScript criados/alterados e git diff --check também passaram. Os logs locais são mantidos em logs/stage12-*.log. O build da imagem concluiu com bun install --frozen-lockfile nas dependências de desenvolvimento e produção.

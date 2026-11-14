@@ -10,6 +10,7 @@ import { parseWagerMessage } from './parse-wager-message.js';
 import { classifyMessageError } from './message-error-classifier.js';
 import { retryDelay } from '../retry-delay.js';
 import { MessagingDiagnostics } from '../messaging-diagnostics.js';
+import type { DistributedTestBarrier } from '../distributed-test-barrier.js';
 
 export const WAGER_CONSUMER_NAME = 'wager-financial-v1';
 export interface HandlingResult {
@@ -25,6 +26,7 @@ export class WagerMessageHandler {
     private readonly queue: WagerQueue,
     private readonly options: WorkerOptions,
     private readonly diagnostics: MessagingDiagnostics,
+    private readonly barrier?: DistributedTestBarrier,
   ) {}
 
   async handle(
@@ -84,6 +86,7 @@ export class WagerMessageHandler {
         transactionId: result.transactionId,
         status: result.status,
         failureCode: result.failureCode,
+        idempotentReplay: result.idempotentReplay,
       });
       signal.throwIfAborted();
       if (!result.canAcknowledge) {
@@ -111,6 +114,11 @@ export class WagerMessageHandler {
           failureCode: 'TERMINAL_FAILED',
         });
       }
+      await this.barrier?.wait(
+        'consumer-after-commit',
+        message.messageId,
+        signal,
+      );
       await this.acknowledge(delivery, fields);
       return { continueGroup: true, retrySeconds: 0 };
     } catch (error) {

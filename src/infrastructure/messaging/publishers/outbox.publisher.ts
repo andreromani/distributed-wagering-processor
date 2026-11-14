@@ -4,6 +4,7 @@ import type { OutboxDeliveryStore } from '../../../application/ports/outbox-deli
 import type { WorkerOptions } from '../../config/worker-options.js';
 import { MessagingDiagnostics } from '../messaging-diagnostics.js';
 import { retryDelay, waitForWorker } from '../retry-delay.js';
+import type { DistributedTestBarrier } from '../distributed-test-barrier.js';
 
 export class OutboxPublisher {
   readonly #poll = new AbortController();
@@ -18,6 +19,7 @@ export class OutboxPublisher {
     private readonly diagnostics: MessagingDiagnostics,
     private readonly now: () => Date = () => new Date(),
     private readonly wait = waitForWorker,
+    private readonly barrier?: DistributedTestBarrier,
   ) {}
 
   start(): void {
@@ -93,7 +95,17 @@ export class OutboxPublisher {
                 : undefined,
           };
           try {
+            await this.barrier?.wait(
+              'publisher-before-send',
+              message.id,
+              signal,
+            );
             await this.publisher.publish(message, signal);
+            await this.barrier?.wait(
+              'publisher-after-send',
+              message.id,
+              signal,
+            );
             signal.throwIfAborted();
             message.markPublished(this.now());
             this.diagnostics.increment('published');

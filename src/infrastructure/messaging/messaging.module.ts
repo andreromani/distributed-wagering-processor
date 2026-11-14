@@ -18,6 +18,7 @@ import { TypeOrmPendingReferenceReader } from '../database/repositories/typeorm-
 import { ReprocessPendingReferenceUseCase } from '../../application/use-cases/reprocess-pending-reference.use-case.js';
 import { ObservabilityModule } from '../observability/observability.module.js';
 import { OperationalMetrics } from '../observability/operational-metrics.js';
+import { DistributedTestBarrier } from './distributed-test-barrier.js';
 
 @Module({
   imports: [
@@ -27,6 +28,10 @@ import { OperationalMetrics } from '../observability/operational-metrics.js';
     ObservabilityModule,
   ],
   providers: [
+    {
+      provide: DistributedTestBarrier,
+      useFactory: () => new DistributedTestBarrier(),
+    },
     {
       provide: TypeOrmPendingReferenceReader,
       inject: [DataSource],
@@ -76,17 +81,20 @@ import { OperationalMetrics } from '../observability/operational-metrics.js';
         ProcessWagerTransactionUseCase,
         SqsTransport,
         MessagingDiagnostics,
+        DistributedTestBarrier,
       ],
       useFactory: (
         process: ProcessWagerTransactionUseCase,
         queue: SqsTransport,
         diagnostics: MessagingDiagnostics,
+        barrier: DistributedTestBarrier,
       ) =>
         new WagerMessageHandler(
           process,
           queue,
           environment().workers,
           diagnostics,
+          barrier,
         ),
     },
     {
@@ -106,17 +114,26 @@ import { OperationalMetrics } from '../observability/operational-metrics.js';
     },
     {
       provide: OutboxPublisher,
-      inject: [TypeOrmOutboxDeliveryStore, SqsTransport, MessagingDiagnostics],
+      inject: [
+        TypeOrmOutboxDeliveryStore,
+        SqsTransport,
+        MessagingDiagnostics,
+        DistributedTestBarrier,
+      ],
       useFactory: (
         store: TypeOrmOutboxDeliveryStore,
         publisher: SqsTransport,
         diagnostics: MessagingDiagnostics,
+        barrier: DistributedTestBarrier,
       ) =>
         new OutboxPublisher(
           store,
           publisher,
           environment().workers,
           diagnostics,
+          undefined,
+          undefined,
+          barrier,
         ),
     },
     {
