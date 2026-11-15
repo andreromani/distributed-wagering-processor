@@ -14,6 +14,7 @@ import { WagerTransactionPendingReference } from '../../domain/events/wager-tran
 import { WalletBalanceChanged } from '../../domain/events/wallet-balance-changed.event.js';
 
 export interface EventContext {
+  source?: 'http' | 'sqs' | 'reference';
   correlationId?: string;
   causationId?: string;
 }

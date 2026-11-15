@@ -11,6 +11,12 @@ import { RejectedSnapshots1797000001000 } from '../../src/infrastructure/databas
 import { FinancialDiagnostics } from '../../src/infrastructure/http/financial-diagnostics.js';
 import { OperationalMetrics } from '../../src/infrastructure/observability/operational-metrics.js';
 import { instanceId } from '../../src/infrastructure/config/instance-id.js';
+import { JsonLog } from '../../src/infrastructure/observability/json-log.js';
+import { FinancialObservationLogger } from '../../src/infrastructure/observability/financial-observation.js';
+import { TypeOrmFinancialTransaction } from '../../src/infrastructure/database/repositories/typeorm-financial-transaction.js';
+import { PersistenceError } from '../../src/application/ports/persistence.error.js';
+import { ProcessWagerTransactionUseCase } from '../../src/application/use-cases/process-wager-transaction.use-case.js';
+import { WagerTransactionKind as Kind } from '../../src/domain/financial.types.js';
 
 const database = 'wager_metrics_' + crypto.randomUUID().replaceAll('-', '');
 const admin = new DataSource({
@@ -35,6 +41,17 @@ beforeAll(async () => {
   await source.initialize();
   await source.runMigrations();
   const module = await Test.createTestingModule({ imports: [AppModule] })
+    .overrideProvider(FinancialObservationLogger)
+    .useValue(
+      new FinancialObservationLogger(
+        new JsonLog(
+          (record) => {
+            records.push(record);
+          },
+          { ...process.env, LOG_LEVEL: 'debug' },
+        ),
+      ),
+    )
     .overrideProvider(DataSource)
     .useValue(source)
     .overrideProvider(FinancialDiagnostics)
@@ -180,4 +197,253 @@ test('real HTTP processing, replay, conflict and reconciliation are exposed as b
       walletId: wallet.id,
     }),
   );
+});
+
+test('financial logs preserve identity, safe outcomes and actual SQL boundaries', async () => {
+  const request = async (
+    path: string,
+    body: unknown,
+    correlation: string,
+    key?: string,
+  ) => {
+    const response = await fetch(url + path, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-correlation-id': correlation,
+        ...(key ? { 'idempotency-key': key } : {}),
+      },
+      body: JSON.stringify(body),
+    });
+    return {
+      response,
+      body: (await response.json()) as Record<string, unknown>,
+    };
+  };
+  for (const amount of ['0.00', '100.00']) {
+    const correlation = crypto.randomUUID();
+    const playerId = crypto.randomUUID();
+    const opened = await request(
+      '/wallets',
+      { playerId, initialBalance: { amount, currency: 'BRL' } },
+      correlation,
+    );
+    expect(opened.response.status).toBe(201);
+    expect(
+      records.find(
+        (record) =>
+          record.event === 'wallet_opened' &&
+          record.correlationId === correlation,
+      ),
+    ).toMatchObject({
+      walletId: opened.body.id,
+      level: 'info',
+      source: 'http',
+      durationMs: expect.any(Number),
+    });
+    if (amount === '0.00') {
+      continue;
+    }
+    const key = crypto.randomUUID();
+    const payload = {
+      walletId: opened.body.id,
+      playerId,
+      providerId: 'logging-review',
+      externalTransactionId: crypto.randomUUID(),
+      roundId: 'round',
+      gameId: 'game',
+      kind: 'BET',
+      money: { amount: '10.00', currency: 'BRL' },
+    };
+    const firstCorrelation = crypto.randomUUID();
+    const replayCorrelation = crypto.randomUUID();
+    const first = await request(
+      '/wagering/transactions',
+      payload,
+      firstCorrelation,
+      key,
+    );
+    const replay = await request(
+      '/wagering/transactions',
+      payload,
+      replayCorrelation,
+      key,
+    );
+    expect(first.response.status).toBe(200);
+    expect(replay.body.transactionId).toBe(first.body.transactionId);
+    for (const [correlationId, idempotentReplay] of [
+      [firstCorrelation, false],
+      [replayCorrelation, true],
+    ] as const) {
+      expect(
+        structuredClone(
+          records.find(
+            (record) =>
+              record.event === 'financial_result' &&
+              record.correlationId === correlationId,
+          ),
+        ),
+      ).toMatchObject({
+        transactionId: first.body.transactionId,
+        kind: 'BET',
+        externalTransactionId: payload.externalTransactionId,
+        durationMs: expect.any(Number),
+        idempotentReplay,
+        source: 'http',
+        level: 'info',
+      });
+    }
+    const pendingEvents = await source.query<{ correlation: string }[]>(
+      "SELECT payload->>'correlationId' AS correlation FROM outbox_messages WHERE payload->'data'->>'transactionId'=$1",
+      [first.body.transactionId],
+    );
+    expect(pendingEvents).toHaveLength(2);
+    expect(
+      pendingEvents.every((record) => record.correlation === firstCorrelation),
+    ).toBe(true);
+    const flow = records.filter(
+      (record) => record.correlationId === firstCorrelation,
+    );
+    for (const event of [
+      'financial_processing_started',
+      'financial_attempt_started',
+      'wallet_lock_requested',
+      'wallet_lock_acquired',
+      'financial_transaction_committed',
+    ]) {
+      expect(
+        flow.some(
+          (record) => record.event === event && record.level === 'debug',
+        ),
+      ).toBe(true);
+    }
+    expect(
+      flow.findIndex(
+        (record) => record.event === 'financial_transaction_committed',
+      ),
+    ).toBeLessThan(
+      flow.findIndex((record) => record.event === 'financial_result'),
+    );
+    const rejectionCorrelation = crypto.randomUUID();
+    const rejected = await request(
+      '/wagering/transactions',
+      {
+        ...payload,
+        externalTransactionId: crypto.randomUUID(),
+        money: { amount: '1000.00', currency: 'BRL' },
+      },
+      rejectionCorrelation,
+      crypto.randomUUID(),
+    );
+    expect(rejected.response.status).toBe(422);
+    expect(
+      records.find(
+        (record) =>
+          record.event === 'financial_result' &&
+          record.correlationId === rejectionCorrelation,
+      ),
+    ).toMatchObject({
+      level: 'info',
+      status: 'REJECTED',
+      failureCode: 'INSUFFICIENT_FUNDS',
+    });
+    const technical: Readonly<Record<string, unknown>>[] = [];
+    const observer = {
+      record: (
+        event: string,
+        fields: Readonly<Record<string, unknown>>,
+      ): void => {
+        technical.push({ event, ...fields });
+      },
+    };
+    const actual = new TypeOrmFinancialTransaction(source);
+    const failedTransaction = await actual
+      .run(
+        async (context) => {
+          await context.wallets.findByIdForUpdate(String(opened.body.id));
+          throw new PersistenceError('transient');
+        },
+        { observer, fields: { sqlAttempt: 1 } },
+      )
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+    expect(failedTransaction).toBeInstanceOf(Error);
+    expect(
+      technical.some(
+        (record) => record.event === 'financial_transaction_failed',
+      ),
+    ).toBe(true);
+    expect(
+      technical.some(
+        (record) => record.event === 'financial_transaction_committed',
+      ),
+    ).toBe(false);
+    expect(
+      technical.find((record) => record.event === 'wallet_lock_acquired'),
+    ).toMatchObject({ durationMs: expect.any(Number), sqlAttempt: 1 });
+    expect(
+      await actual.run(async () => 42, {
+        observer: {
+          record: () => {
+            throw new Error('logging unavailable');
+          },
+        },
+        fields: {},
+      }),
+    ).toBe(42);
+    const safeProcessor = new ProcessWagerTransactionUseCase(
+      actual,
+      undefined,
+      undefined,
+      {
+        record: () => {
+          throw new Error('observer unavailable during real writes');
+        },
+      },
+    );
+    const safelyCommitted = await safeProcessor.execute({
+      ...payload,
+      walletId: String(opened.body.id),
+      kind: Kind.Bet,
+      externalTransactionId: crypto.randomUUID(),
+      idempotencyKey: crypto.randomUUID(),
+      money: { amount: '1.00', currency: 'BRL' },
+    });
+    expect(safelyCommitted).toMatchObject({
+      status: 'PROCESSED',
+      balance: { amount: '89.00', currency: 'BRL' },
+    });
+    const reconciled = await fetch(
+      url + '/wallets/' + String(opened.body.id) + '/reconciliation',
+      { method: 'POST' },
+    );
+    expect(await reconciled.json()).toMatchObject({
+      consistent: true,
+      difference: { amount: '0.00' },
+    });
+    for (const record of records.filter(
+      (item) =>
+        item.correlationId === firstCorrelation ||
+        item.correlationId === replayCorrelation,
+    )) {
+      expect(JSON.stringify(record)).not.toMatch(
+        /amount|balance|password|ReceiptHandle|idempotencyKey/,
+      );
+    }
+    for (const sampleCorrelation of [
+      firstCorrelation,
+      replayCorrelation,
+      rejectionCorrelation,
+    ]) {
+      const sample = records.find(
+        (record) =>
+          record.event === 'financial_result' &&
+          record.correlationId === sampleCorrelation,
+      );
+      expect(sample).toBeDefined();
+      console.log(JSON.stringify(sample));
+    }
+  }
 });

@@ -62,7 +62,7 @@
 - Logs JSON devem incluir os identificadores de correlação aplicáveis, sem segredos, dados sensíveis ou payloads financeiros completos.
 - Cubra métricas de status, duplicatas, retries, DLQ, conflitos de lock, outbox lag e latência. Readiness verifica PostgreSQL e SQS; liveness verifica o processo.
 - Autenticação é opcional e não pontua: se omitida, documente desenho e ponto de extensão; se implementada, integre IdP externo, sem autenticação artesanal. Health permanece aberto; mensagens internas ainda exigem validações de domínio.
-- O Observe foi removido do template. A observabilidade obrigatória deverá ser implementada conforme o CHALLENGE.md, utilizando logs estruturados, métricas e correlação, sem introduzir dependências desnecessárias.
+- A observabilidade obrigatória está implementada conforme o CHALLENGE.md. Preserve e mantenha logs estruturados, métricas e correlação, sem expor segredos, dados sensíveis ou payloads financeiros completos e sem introduzir dependências desnecessárias.
 
 ## Testes e validação
 
@@ -93,7 +93,7 @@
 - Preserve imutabilidade em tempo de execução quando exigida. readonly não impede mutações em JavaScript e Object.freeze não congela objetos internos recursivamente.
 - Proteja datas e outras estruturas mutáveis com cópias defensivas na entrada e saída quando necessário.
 - Preserve contratos públicos e use serialização explícita. Avalie enumerabilidade e os efeitos de Object.keys, spread e JSON.stringify ao mudar getters para propriedades.
-- Aplique essas convenções também às futuras InboxMessage, OutboxMessage e IntegrationEvent.
+- Aplique essas convenções também às classes InboxMessage, OutboxMessage e IntegrationEvent.
 
 ## Blocos de controle e métodos
 

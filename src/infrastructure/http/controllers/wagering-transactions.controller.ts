@@ -49,6 +49,7 @@ export class WageringTransactionsController {
       walletId: body.walletId,
     });
     const idempotencyKey = requestHeader(request, 'idempotency-key', true);
+    const started = performance.now();
     if (idempotencyKey === undefined) {
       throw new Error('Validated idempotency header is missing');
     }
@@ -63,12 +64,16 @@ export class WageringTransactionsController {
       money: body.money,
       referenceExternalTransactionId: body.referenceExternalTransactionId,
       idempotencyKey,
+      source: 'http',
       correlationId: String(
         response.getHeader('x-correlation-id') ?? crypto.randomUUID(),
       ),
     });
     response.status(processingStatus(result.status));
     this.diagnostics.processing(result, {
+      externalTransactionId: body.externalTransactionId,
+      kind: body.kind,
+      durationMs: performance.now() - started,
       providerId: body.providerId,
       walletId: body.walletId,
       correlationId: String(response.getHeader('x-correlation-id')),

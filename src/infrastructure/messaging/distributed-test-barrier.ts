@@ -3,6 +3,7 @@ import { rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import { instanceId } from '../config/instance-id.js';
 import { waitForWorker } from './retry-delay.js';
+import { JsonLog } from '../observability/json-log.js';
 
 export type DistributedTestPoint =
   'consumer-after-commit' | 'publisher-before-send' | 'publisher-after-send';
@@ -80,9 +81,7 @@ export class DistributedTestBarrier {
     const path = join(this.#directory, point + '-' + id + '.json');
     await Bun.write(path + '.next', JSON.stringify(marker));
     await rename(path + '.next', path);
-    console.log(
-      JSON.stringify({ event: 'distributed_test_barrier', ...marker }),
-    );
+    new JsonLog().emit('info', 'distributed_test_barrier', marker);
     const deadline = Date.now() + 180000;
     while (this.matches(point, id)) {
       signal.throwIfAborted();

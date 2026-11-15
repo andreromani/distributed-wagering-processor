@@ -1,6 +1,6 @@
 import type { ReconciliationObserver } from '../../application/ports/reconciliation-observer.js';
 import type { ReconciliationSnapshot } from '../../application/ports/wallet-reconciliation-reader.js';
-import { instanceId } from '../config/instance-id.js';
+import { JsonLog } from '../observability/json-log.js';
 import type { OperationalMetrics } from '../observability/operational-metrics.js';
 import type { ProcessWagerResult } from '../../application/use-cases/process-wager-transaction.use-case.js';
 
@@ -31,7 +31,18 @@ export class FinancialDiagnostics implements ReconciliationObserver {
 
   record(record: Readonly<Record<string, unknown>>): void {
     this.metrics?.conflict(record.code);
-    this.sink({ ...record, instanceId: instanceId() });
+    const level = record.level;
+    new JsonLog(this.sink).emit(
+      level === 'debug' ||
+        level === 'info' ||
+        level === 'warn' ||
+        level === 'error' ||
+        level === 'fatal'
+        ? level
+        : 'info',
+      typeof record.event === 'string' ? record.event : 'financial_diagnostic',
+      record,
+    );
   }
 
   processing(
@@ -41,6 +52,7 @@ export class FinancialDiagnostics implements ReconciliationObserver {
     this.metrics?.processing(result, 'http');
     this.record({
       event: 'financial_result',
+      source: 'http',
       ...identifiers,
       transactionId: result.transactionId,
       status: result.status,

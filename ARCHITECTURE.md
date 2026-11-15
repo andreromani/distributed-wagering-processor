@@ -272,6 +272,12 @@ Divergência retorna HTTP 200/consistent=false, log sanitizado e métrica; não 
 
 ### Logs, métricas e health
 
+JsonLog padroniza timestamp UTC ISO, level, event e instanceId, com seleção de campos escalares e filtro LOG_LEVEL (info por padrão). Os diagnósticos HTTP, mensageria, NestJS e lifecycle reutilizam a saída stdout local; serialização/emissão são protegidas para não alterar resultados financeiros. DEBUG/INFO/WARN/ERROR têm filtragem cumulativa; configuração inválida é rejeitada pelo ambiente.
+
+FinancialObserver é uma porta síncrona independente de framework, no-op por padrão e protegida contra falha do observador. Instrumenta início, tentativa SQL, retry, referência e contexto transacional; o adaptador mede aquisição da consulta com lock, incluindo execução/round-trip, sem consultas extras. financial_transaction_committed só ocorre após o retorno confirmado de DataSource.transaction. Falhas usam financial_transaction_failed, sem prometer rollback confirmado.
+
+financial_result continua único por resultado HTTP/SQS e inclui source, kind, identidade externa e durationMs; wallet_opened registra abertura sem dinheiro/playerId. Rejeições esperadas ficam em INFO e conflitos/4xx em WARN. outbox_event_published mantém o ponto original e stage=broker_confirmed; outbox_publication_committed só ocorre depois do commit dos metadados. Um evento WalletBalanceChanged continua sem providerId próprio; não se altera seu contrato nem se consulta o banco apenas para preencher o log.
+
 Logs JSON incluem instanceId, correlationId e identificadores aplicáveis de mensagem, provider, wallet e transação. Correlação é validada; ausência/invalidade usa UUID confiável. FinancialExceptionFilter recebe contexto validado por resposta, sem ler payload/headers brutos inválidos. operationId de tentativa é separado de transactionId persistido.
 
 Não são registrados corpos financeiros completos, credenciais, SQL ou stacks brutos. Bootstrap/lifecycle também sanitizam erros. Correlação/causalidade ficam nos eventos confirmados; replays não reescrevem envelopes originais.
@@ -318,7 +324,9 @@ Cada execução tem diretório isolado por runId. O finally aguarda desativaçõ
 
 ## Validação e referências
 
-Última suíte convencional: **517 testes aprovados, zero falhas e 2.102 assertions**, em 19 arquivos. **Nove cenários distribuídos aprovados, zero falhas e 1.208 assertions**, com três instâncias reais simultâneas. Build, typecheck e lint aprovados. São resultados existentes; não houve nova execução de suítes nesta revisão nem experimento de carga.
+Validação final com Bun 1.4.4: **529 testes convencionais aprovados, zero falhas e 2.236 assertions**, em 20 arquivos e 100,28 segundos. **Nove cenários distribuídos aprovados, zero falhas e 1.208 assertions**, com três instâncias reais simultâneas. RunId `0315e8e3-cc09-4dba-a2ce-f8a994a1b15e`: `completed=true`, `normalConfigurationRestored=true`, `pending=[]`, 16 wallets consistentes e 83 eventos publicados/83 observados no broker isolado.
+
+As execuções estão em `logs/observability-final-test-run.log` e `logs/observability-final-distributed.log`. Comprovaram filtragem LOG_LEVEL, isolamento das falhas de logging, retry SQL, contexto HTTP/SQS e distinção broker/metadados, preservando idempotência e recuperação financeira. A entrega continua at-least-once; observar todos os eventos nessa execução não garante exactly-once. Resultados anteriores estão no [histórico de validação](docs/VALIDATION.md#resultados-históricos). Build, typecheck e lint permanecem aprovados nas verificações já registradas. Não houve execução de suítes nesta revisão documental nem experimento de carga.
 
 | Documento | Conteúdo |
 | --- | --- |

@@ -5,6 +5,7 @@ import type { WorkerOptions } from '../../config/worker-options.js';
 import { MessagingDiagnostics } from '../messaging-diagnostics.js';
 import { retryDelay, waitForWorker } from '../retry-delay.js';
 import type { DistributedTestBarrier } from '../distributed-test-barrier.js';
+import { classifyMessageError } from '../consumers/message-error-classifier.js';
 
 export class OutboxPublisher {
   readonly #poll = new AbortController();
@@ -71,6 +72,7 @@ export class OutboxPublisher {
       i += 1
     ) {
       signal.throwIfAborted();
+      let committedFields: Readonly<Record<string, unknown>> | undefined;
       const found = await this.store.processNext(
         this.now(),
         async (message) => {
@@ -109,25 +111,38 @@ export class OutboxPublisher {
             signal.throwIfAborted();
             message.markPublished(this.now());
             this.diagnostics.increment('published');
-            this.diagnostics.event('outbox_event_published', fields);
+            this.diagnostics.event('outbox_event_published', {
+              ...fields,
+              stage: 'broker_confirmed',
+            });
+            committedFields = fields;
           } catch (error) {
             if (signal.aborted) {
               throw error;
             }
-            message.scheduleRetry(
-              this.now(),
-              retryDelay(
-                message.attempts + 1,
-                this.options.outboxRetryBaseMs,
-                this.options.outboxRetryMaxMs,
-              ),
+            const delayMs = retryDelay(
+              message.attempts + 1,
+              this.options.outboxRetryBaseMs,
+              this.options.outboxRetryMaxMs,
             );
+            message.scheduleRetry(this.now(), delayMs);
             this.diagnostics.increment('publishFailures');
-            this.diagnostics.event('outbox_publish_failed', fields);
+            this.diagnostics.event('outbox_publish_failed', {
+              ...fields,
+              failureCode: classifyMessageError(error).code,
+              nextAttemptAt: message.nextAttemptAt?.toISOString(),
+              delayMs,
+            });
           }
         },
         signal,
       );
+      if (committedFields) {
+        this.diagnostics.event('outbox_publication_committed', {
+          ...committedFields,
+          stage: 'metadata_committed',
+        });
+      }
       if (!found) {
         break;
       }

@@ -14,6 +14,7 @@ import { ProcessWagerTransactionUseCase } from '../application/use-cases/process
 import { ReprocessPendingReferenceUseCase } from '../application/use-cases/reprocess-pending-reference.use-case.js';
 import { ObservabilityModule } from './observability/observability.module.js';
 import { OperationalMetrics } from './observability/operational-metrics.js';
+import { FinancialObservationLogger } from './observability/financial-observation.js';
 
 @Module({
   imports: [DatabaseModule, ObservabilityModule],
@@ -51,15 +52,25 @@ import { OperationalMetrics } from './observability/operational-metrics.js';
     })),
     {
       provide: OpenWalletUseCase,
-      inject: [TypeOrmFinancialTransaction],
-      useFactory: (transaction: TypeOrmFinancialTransaction) =>
-        new OpenWalletUseCase(transaction),
+      inject: [TypeOrmFinancialTransaction, FinancialObservationLogger],
+      useFactory: (
+        transaction: TypeOrmFinancialTransaction,
+        observer: FinancialObservationLogger,
+      ) => new OpenWalletUseCase(transaction, undefined, observer),
     },
     {
       provide: ProcessWagerTransactionUseCase,
-      inject: [TypeOrmFinancialTransaction],
-      useFactory: (transaction: TypeOrmFinancialTransaction) =>
-        new ProcessWagerTransactionUseCase(transaction),
+      inject: [TypeOrmFinancialTransaction, FinancialObservationLogger],
+      useFactory: (
+        transaction: TypeOrmFinancialTransaction,
+        observer: FinancialObservationLogger,
+      ) =>
+        new ProcessWagerTransactionUseCase(
+          transaction,
+          undefined,
+          undefined,
+          observer,
+        ),
     },
     {
       provide: ReprocessPendingReferenceUseCase,

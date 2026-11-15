@@ -246,16 +246,19 @@ A suíte distribuída cria banco e filas exclusivos, testa três processos, conc
 
 | Validação | Resultado registrado |
 | --- | --- |
-| Suíte convencional final | 517 testes aprovados, zero falhas, 2.102 assertions em 19 arquivos; 134,54 segundos |
+| Suíte convencional final | 529 testes aprovados, zero falhas, 2.236 assertions em 20 arquivos; 100,28 segundos |
 | Verificações estáticas e build | Build, typecheck e lint aprovados |
-| Suíte distribuída após a correção Windows/Docker | Nove cenários PASS, zero FAIL, 1.208 assertions |
+| Suíte distribuída após as melhorias de observabilidade | Nove cenários PASS, zero FAIL, 1.208 assertions; três instâncias reais |
 | Demonstração manual | Fluxo principal 1000.00 → 1000.00; replay entre instâncias; ledger 2/2/1; referências; SQS e DLQ |
 
-Execução distribuída final: `11b97e9e-b8b9-4846-ac6f-611c4044927a`, com três instâncias reais simultâneas e `normalConfigurationRestored=true`. Os resultados correspondem à validação final do projeto; o histórico está separado em [evidências, cenários e incidentes](docs/VALIDATION.md).
+Validação com Bun 1.4.4. Execução distribuída final: `0315e8e3-cc09-4dba-a2ce-f8a994a1b15e`, com `completed=true`, `normalConfigurationRestored=true` e `pending=[]`. A reconciliação confirmou 16 wallets consistentes e 83 eventos publicados/83 observados no broker isolado.
+
+Evidências locais: `logs/observability-final-test-run.log` e `logs/observability-final-distributed.log`. A validação cobre níveis de log, falhas do logger sem impacto financeiro, tentativas SQL, contexto HTTP/SQS e confirmação da outbox. Resultados anteriores e detalhes estão em [evidências, cenários e incidentes](docs/VALIDATION.md#validação-das-melhorias-de-observabilidade).
 
 ## Observabilidade
 
 - Logs JSON incluem instanceId, correlação e identificadores aplicáveis, sem corpo financeiro completo, credenciais, SQL ou stack bruto.
+- `LOG_LEVEL=info` é o padrão; use `debug`, `info`, `warn` ou `error` (fatal também é aceito). DEBUG acrescenta tentativas SQL, aquisição de lock e referências; detalhes em [operação dos logs](docs/OPERATIONS.md#níveis-e-correlação-dos-logs).
 - `/health/live` verifica o processo; `/health/ready` verifica PostgreSQL e SQS. Ambos permanecem abertos.
 - `/metrics` expõe Prometheus: status de transações, replays, retries, DLQ, conflitos de lock, reconciliação, latência e idade do evento pendente mais antigo da outbox.
 

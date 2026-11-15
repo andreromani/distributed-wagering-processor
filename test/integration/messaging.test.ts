@@ -732,6 +732,10 @@ test('two independent publishers use SKIP LOCKED while one holds a row during se
 }, 15000);
 
 test('crash after broker confirmation rolls back publication metadata and retries the same event ID', async () => {
+  const publicationRecords: Readonly<Record<string, unknown>>[] = [];
+  const publicationDiagnostics = new MessagingDiagnostics((record) => {
+    publicationRecords.push(record);
+  });
   const w = await wallet();
   const original = await publishedRows(w.id);
   const store = new TypeOrmOutboxDeliveryStore(source);
@@ -753,12 +757,24 @@ test('crash after broker confirmation rolls back publication metadata and retrie
       crash,
       transport,
       options,
-      metrics,
+      publicationDiagnostics,
     ).publishBatch();
   } catch (error) {
     failure = error;
   }
   expect(failure).toBeInstanceOf(Error);
+  expect(
+    publicationRecords.some(
+      (record) =>
+        record.event === 'outbox_event_published' &&
+        record.stage === 'broker_confirmed',
+    ),
+  ).toBe(true);
+  expect(
+    publicationRecords.some(
+      (record) => record.event === 'outbox_publication_committed',
+    ),
+  ).toBe(false);
   expect(
     (await publishedRows(w.id)).every((row) => row.published_at === null),
   ).toBe(true);

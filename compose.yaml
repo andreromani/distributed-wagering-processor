@@ -1,5 +1,6 @@
 x-application-environment: &application-environment
   NODE_ENV: production
+  LOG_LEVEL: ${LOG_LEVEL:-info}
   PORT: 3000
   POSTGRES_HOST: postgres
   POSTGRES_PORT: 5432

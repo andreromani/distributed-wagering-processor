@@ -1,6 +1,6 @@
 import { Injectable, Inject, type OnApplicationShutdown } from '@nestjs/common';
 import { SQSClient } from '@aws-sdk/client-sqs';
-import { instanceId } from '../../config/instance-id.js';
+import { JsonLog } from '../../observability/json-log.js';
 
 @Injectable()
 export class SqsLifecycle implements OnApplicationShutdown {
@@ -8,11 +8,6 @@ export class SqsLifecycle implements OnApplicationShutdown {
 
   onApplicationShutdown(): void {
     this.client.destroy();
-    console.log(
-      JSON.stringify({
-        event: 'sqs_client_destroyed',
-        instanceId: instanceId(),
-      }),
-    );
+    new JsonLog().emit('info', 'sqs_client_destroyed');
   }
 }

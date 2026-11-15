@@ -119,7 +119,10 @@ export class FinancialExceptionFilter implements ExceptionFilter {
         : undefined;
     if (mapped.statusCode >= 400) {
       this.diagnostics.record({
-        level: 'error',
+        level:
+          mapped.statusCode >= 500 && mapped.statusCode !== 503
+            ? 'error'
+            : 'warn',
         event: 'http_request_failed',
         statusCode: mapped.statusCode,
         code: mapped.code,

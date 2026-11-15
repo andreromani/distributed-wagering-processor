@@ -14,6 +14,11 @@ import { TypeOrmInboxRepository } from './typeorm-inbox.repository.js';
 import { TypeOrmOutboxRepository } from './typeorm-outbox.repository.js';
 import type { OperationalMetrics } from '../../observability/operational-metrics.js';
 import { PersistenceError } from '../../../application/ports/persistence.error.js';
+import { FinancialApplicationError } from '../../../application/errors/financial-application.error.js';
+import {
+  observeFinancial,
+  type FinancialObservation,
+} from '../../../application/ports/financial-observer.js';
 
 export class TypeOrmFinancialTransaction implements FinancialTransaction {
   constructor(
@@ -21,16 +26,19 @@ export class TypeOrmFinancialTransaction implements FinancialTransaction {
     private readonly metrics?: OperationalMetrics,
   ) {}
 
-  async run<T>(work: (context: FinancialContext) => Promise<T>): Promise<T> {
+  async run<T>(
+    work: (context: FinancialContext) => Promise<T>,
+    observation?: FinancialObservation,
+  ): Promise<T> {
     try {
       const signal = transactionCancellation.getStore();
       signal?.throwIfAborted();
       await ensureDatabaseConnection(this.source);
-      return await this.source.transaction(
+      const result = await this.source.transaction(
         'READ COMMITTED',
         async (manager) => {
           const context: FinancialContext = {
-            wallets: new TypeOrmWalletRepository(manager),
+            wallets: new TypeOrmWalletRepository(manager, observation),
             transactions: new TypeOrmWagerTransactionRepository(manager),
             ledger: new TypeOrmLedgerRepository(manager),
             inbox: new TypeOrmInboxRepository(manager),
@@ -43,8 +51,36 @@ export class TypeOrmFinancialTransaction implements FinancialTransaction {
           return result;
         },
       );
+      observeFinancial(observation, 'financial_transaction_committed');
+      return result;
     } catch (error) {
       const mapped = persistenceError(error);
+      observeFinancial(
+        observation,
+        'financial_transaction_failed',
+        {
+          errorCategory:
+            mapped instanceof PersistenceError
+              ? mapped.category
+              : 'application',
+          failureCode:
+            mapped instanceof PersistenceError
+              ? mapped.category === 'transient'
+                ? 'TRANSIENT_FAILURE'
+                : mapped.category === 'unique'
+                  ? 'IDENTITY_RACE'
+                  : 'PERMANENT_FAILURE'
+              : mapped instanceof FinancialApplicationError
+                ? mapped.code
+                : 'UNCLASSIFIED_FAILURE',
+        },
+        (mapped instanceof PersistenceError &&
+          mapped.category !== 'permanent') ||
+          (mapped instanceof FinancialApplicationError &&
+            mapped.code !== 'PERMANENT_FAILURE')
+          ? 'warn'
+          : 'error',
+      );
       this.metrics?.sqlFailure(
         error,
         mapped instanceof PersistenceError && mapped.category === 'transient',

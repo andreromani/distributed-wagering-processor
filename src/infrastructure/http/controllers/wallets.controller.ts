@@ -28,6 +28,7 @@ import { walletResponse } from '../mappers/wallet-response.mapper.js';
 import { ledgerResponse } from '../mappers/wallet-ledger-response.mapper.js';
 import { FinancialAuthGuard } from '../financial-auth.guard.js';
 import { setFinancialErrorContext } from '../financial-error-context.js';
+import { FinancialDiagnostics } from '../financial-diagnostics.js';
 
 @Controller('wallets')
 @UseGuards(FinancialAuthGuard)
@@ -39,20 +40,31 @@ export class WalletsController {
     private readonly list: ListWalletLedgerUseCase,
     @Inject(ReconcileWalletUseCase)
     private readonly reconcile: ReconcileWalletUseCase,
+    @Inject(FinancialDiagnostics)
+    private readonly diagnostics: FinancialDiagnostics,
   ) {}
 
   @Post()
-  create(
+  async create(
     @Body(httpValidation(CreateWalletDto)) body: CreateWalletDto,
     @Res({ passthrough: true }) response: Response,
   ): Promise<OpenWalletResult> {
-    return this.open.execute({
+    const started = performance.now();
+    const result = await this.open.execute({
       playerId: body.playerId,
       initialBalance: body.initialBalance,
       correlationId: String(
         response.getHeader('x-correlation-id') ?? crypto.randomUUID(),
       ),
     });
+    this.diagnostics.record({
+      event: 'wallet_opened',
+      walletId: result.id,
+      correlationId: String(response.getHeader('x-correlation-id')),
+      durationMs: performance.now() - started,
+      source: 'http',
+    });
+    return result;
   }
 
   @Get(':walletId')

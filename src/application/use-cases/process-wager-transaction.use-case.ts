@@ -1,4 +1,10 @@
 import { inboxPayloadHash } from '../services/inbox-payload-hash.js';
+import {
+  observeFinancial,
+  silentFinancialObserver,
+  type FinancialObserver,
+  type FinancialObservation,
+} from '../ports/financial-observer.js';
 import { InvalidMoneyAmountError } from '../../domain/errors/invalid-money-amount.error.js';
 import { InvalidCurrencyError } from '../../domain/errors/invalid-currency.error.js';
 import type { FinancialTransaction } from '../ports/financial-transaction.js';
@@ -73,6 +79,7 @@ export class ProcessWagerTransactionUseCase {
     private readonly transaction: FinancialTransaction,
     private readonly runtime: FinancialRuntime = systemFinancialRuntime,
     private readonly policy: Readonly<ReferenceRetryPolicy> = defaultReferenceRetryPolicy,
+    private readonly observer: FinancialObserver = silentFinancialObserver,
   ) {
     for (const value of Object.values(policy)) {
       if (!Number.isSafeInteger(value) || value < 1) {
@@ -84,43 +91,65 @@ export class ProcessWagerTransactionUseCase {
   async execute(input: ProcessWagerInput): Promise<ProcessWagerResult> {
     const validated = this.validate(input);
     const messageHash = inboxPayloadHash(input);
+    const observation: FinancialObservation = {
+      observer: this.observer,
+      fields: {
+        operationId: validated.id,
+        source: input.source ?? 'http',
+        correlationId: input.correlationId,
+        walletId: validated.walletId,
+        providerId: validated.providerId,
+        externalTransactionId: validated.externalTransactionId,
+        kind: validated.kind,
+      },
+    };
+    observeFinancial(observation, 'financial_processing_started');
 
     return withFinancialRetry(
-      () =>
-        this.transaction.run(async (context) => {
-          const tx = WagerTransaction.create(validated);
-          await this.checkInbox(context, input, messageHash);
+      (sqlAttempt) =>
+        this.transaction.run(
+          async (context) => {
+            const tx = WagerTransaction.create(validated);
+            await this.checkInbox(context, input, messageHash);
 
-          const previous = await this.existing(context, input, tx.payloadHash);
-          if (previous) {
-            return this.replay(context, previous, input, messageHash);
-          }
+            const previous = await this.existing(
+              context,
+              input,
+              tx.payloadHash,
+            );
+            if (previous) {
+              return this.replay(context, previous, input, messageHash);
+            }
 
-          const wallet = await context.wallets.findByIdForUpdate(
-            input.walletId,
-          );
-          if (!wallet) {
-            throw new FinancialApplicationError('WALLET_NOT_FOUND', tx.id);
-          }
+            const wallet = await context.wallets.findByIdForUpdate(
+              input.walletId,
+            );
+            if (!wallet) {
+              throw new FinancialApplicationError('WALLET_NOT_FOUND', tx.id);
+            }
 
-          const winner = await this.existing(context, input, tx.payloadHash);
-          if (winner) {
-            return this.replay(context, winner, input, messageHash);
-          }
+            const winner = await this.existing(context, input, tx.payloadHash);
+            if (winner) {
+              return this.replay(context, winner, input, messageHash);
+            }
 
-          this.assertWalletContext(wallet, tx);
-          const stored = await this.settle(
-            context,
-            wallet,
-            { transaction: tx, referenceAttempts: 0 },
-            input,
-            true,
-          );
-          await this.recordInbox(context, input, messageHash);
+            this.assertWalletContext(wallet, tx);
+            const stored = await this.settle(
+              context,
+              wallet,
+              { transaction: tx, referenceAttempts: 0 },
+              input,
+              true,
+            );
+            await this.recordInbox(context, input, messageHash);
 
-          return this.result(stored, false, input.inbox !== undefined);
-        }),
+            return this.result(stored, false, input.inbox !== undefined);
+          },
+          { ...observation, fields: { ...observation.fields, sqlAttempt } },
+        ),
       validated.id,
+      undefined,
+      observation,
     );
   }
 
@@ -128,59 +157,73 @@ export class ProcessWagerTransactionUseCase {
     transactionId: string,
     metadata: EventContext = {},
   ): Promise<ProcessWagerResult> {
+    const observation: FinancialObservation = {
+      observer: this.observer,
+      fields: {
+        transactionId,
+        correlationId: metadata.correlationId ?? transactionId,
+        source: 'reference',
+      },
+    };
+    observeFinancial(observation, 'financial_processing_started');
     return withFinancialRetry(
-      () =>
-        this.transaction.run(async (context) => {
-          const initial = await context.transactions.findById(transactionId);
-          if (!initial) {
-            throw new FinancialApplicationError(
-              'TRANSACTION_NOT_FOUND',
-              transactionId,
+      (sqlAttempt) =>
+        this.transaction.run(
+          async (context) => {
+            const initial = await context.transactions.findById(transactionId);
+            if (!initial) {
+              throw new FinancialApplicationError(
+                'TRANSACTION_NOT_FOUND',
+                transactionId,
+              );
+            }
+
+            const wallet = await context.wallets.findByIdForUpdate(
+              initial.transaction.walletId,
             );
-          }
+            if (!wallet) {
+              throw new FinancialApplicationError(
+                'WALLET_NOT_FOUND',
+                transactionId,
+              );
+            }
 
-          const wallet = await context.wallets.findByIdForUpdate(
-            initial.transaction.walletId,
-          );
-          if (!wallet) {
-            throw new FinancialApplicationError(
-              'WALLET_NOT_FOUND',
-              transactionId,
+            const stored = await context.transactions.findById(transactionId);
+            if (!stored) {
+              throw new FinancialApplicationError(
+                'TRANSACTION_NOT_FOUND',
+                transactionId,
+              );
+            }
+
+            if (stored.transaction.status !== Status.PendingReference) {
+              return this.result(stored, true, false);
+            }
+
+            const at = this.runtime.now();
+            if (
+              stored.nextAttemptAt &&
+              stored.nextAttemptAt > at &&
+              at.getTime() - stored.transaction.createdAt.getTime() <
+                this.policy.ttlMs
+            ) {
+              return this.result(stored, true, false);
+            }
+
+            const result = await this.settle(
+              context,
+              wallet,
+              stored,
+              metadata,
+              false,
             );
-          }
-
-          const stored = await context.transactions.findById(transactionId);
-          if (!stored) {
-            throw new FinancialApplicationError(
-              'TRANSACTION_NOT_FOUND',
-              transactionId,
-            );
-          }
-
-          if (stored.transaction.status !== Status.PendingReference) {
-            return this.result(stored, true, false);
-          }
-
-          const at = this.runtime.now();
-          if (
-            stored.nextAttemptAt &&
-            stored.nextAttemptAt > at &&
-            at.getTime() - stored.transaction.createdAt.getTime() <
-              this.policy.ttlMs
-          ) {
-            return this.result(stored, true, false);
-          }
-
-          const result = await this.settle(
-            context,
-            wallet,
-            stored,
-            metadata,
-            false,
-          );
-          return this.result(result, false, false);
-        }),
+            return this.result(result, false, false);
+          },
+          { ...observation, fields: { ...observation.fields, sqlAttempt } },
+        ),
       transactionId,
+      undefined,
+      observation,
     );
   }
 
@@ -403,6 +446,30 @@ export class ProcessWagerTransactionUseCase {
               tx.referenceExternalTransactionId,
             );
       const resolved = reference?.transaction;
+      if (tx.referenceExternalTransactionId) {
+        observeFinancial(
+          {
+            observer: this.observer,
+            fields: {
+              ...(inserting
+                ? { operationId: tx.id }
+                : { transactionId: tx.id }),
+              walletId: wallet.id,
+              providerId: tx.providerId,
+              correlationId: metadata.correlationId ?? tx.id,
+              source: metadata.source ?? (inserting ? 'http' : 'reference'),
+            },
+          },
+          resolved
+            ? 'financial_reference_found'
+            : 'financial_reference_missing',
+          {
+            referenceExternalTransactionId: tx.referenceExternalTransactionId,
+            referenceTransactionId: resolved?.id,
+            referenceStatus: resolved?.status,
+          },
+        );
+      }
       if (
         resolved?.status === Status.Processed &&
         tx.requiresReference() &&
@@ -433,6 +500,27 @@ export class ProcessWagerTransactionUseCase {
       }
     } catch (error) {
       if (error instanceof FinancialRuleError) {
+        observeFinancial(
+          {
+            observer: this.observer,
+            fields: {
+              ...(inserting
+                ? { operationId: tx.id }
+                : { transactionId: tx.id }),
+              walletId: wallet.id,
+              providerId: tx.providerId,
+              correlationId: metadata.correlationId ?? tx.id,
+              source: metadata.source ?? (inserting ? 'http' : 'reference'),
+            },
+          },
+          error.code.includes('REFERENCE')
+            ? 'financial_reference_invalid'
+            : 'financial_rule_rejected',
+          {
+            failureCode: error.code,
+            referenceExternalTransactionId: tx.referenceExternalTransactionId,
+          },
+        );
         tx.reject(error.code);
       } else if (error instanceof MoneyOutOfRangeError) {
         tx.reject(FailureCode.InvalidAmount);

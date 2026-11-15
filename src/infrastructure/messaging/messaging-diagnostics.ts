@@ -1,4 +1,5 @@
 import { instanceId } from '../config/instance-id.js';
+import { JsonLog } from '../observability/json-log.js';
 import type { OperationalMetrics } from '../observability/operational-metrics.js';
 import type { ProcessWagerResult } from '../../application/use-cases/process-wager-transaction.use-case.js';
 
@@ -60,6 +61,22 @@ export class MessagingDiagnostics {
       this.metrics?.conflict(fields.failureCode);
     }
 
-    this.sink({ event, instanceId: this.instanceId, ...fields });
+    const level = [
+      'message_received',
+      'message_handling_started',
+      'message_deferred',
+    ].includes(event)
+      ? 'debug'
+      : event.includes('failed') ||
+          event.includes('retry') ||
+          event.includes('exhausted') ||
+          event.includes('deadline') ||
+          event === 'message_dead_lettered'
+        ? fields.failureCode === 'PERMANENT_FAILURE' ||
+          fields.failureCode === 'TERMINAL_FAILED'
+          ? 'error'
+          : 'warn'
+        : 'info';
+    new JsonLog(this.sink).emit(level, event, fields);
   }
 }

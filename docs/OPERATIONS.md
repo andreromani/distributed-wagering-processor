@@ -221,6 +221,39 @@ Contadores e histogramas pertencem a cada processo e reiniciam com ele. Gauges `
 
 Uma pendência pode já estar terminal por esgotamento das cinco tentativas, mesmo antes de completar 24 horas; consulte status e failureCode antes de reenviar. Os timeouts históricos de SQS/readiness permanecem com causa inconclusiva; não atribua uma causa apenas porque uma nova tentativa passou. Histórico e limites estão em [VALIDATION.md](VALIDATION.md).
 
+### Níveis e correlação dos logs
+
+`LOG_LEVEL` aceita debug, info (padrão), warn, error e fatal, sem distinção entre maiúsculas/minúsculas; valores vazios ou desconhecidos falham na validação. Cada nível omite os inferiores. O filtro vale para NestJS, HTTP, mensageria e lifecycle; métricas continuam sendo contabilizadas independentemente do filtro. A saída permanece em stdout, com timestamp UTC ISO, level, event e instanceId.
+
+Para uma API no host, após compilar, habilite DEBUG em PowerShell:
+
+```powershell
+$env:LOG_LEVEL = 'debug'
+bun run start
+```
+
+Em Bash:
+
+```bash
+LOG_LEVEL=debug bun run start
+```
+
+Nos containers, configure `LOG_LEVEL=debug` no `.env` ou no ambiente do Compose e reaplique somente as aplicações com `docker compose up -d --no-deps app-1 app-2 app-3`, após preparar a imagem pelo README. Não recrie aplicações durante uma execução distribuída. Volte para info após o diagnóstico; os scripts que verificam eventos de resultado, barreiras e shutdown precisam de info ou debug.
+
+INFO registra resultados, abertura, ACK, publicação e lifecycle. DEBUG acrescenta início, tentativa SQL, consulta com lock e referência. WARN identifica retries, falhas recuperáveis e conflitos/4xx; ERROR indica falhas técnicas relevantes e divergências. Rejeição financeira esperada permanece INFO. A aquisição do lock inclui execução da consulta e round-trip, não somente espera interna do PostgreSQL.
+
+Exemplo ilustrativo de diagnóstico, sem payload ou valores financeiros:
+
+```json
+{"timestamp":"2026-11-14T18:00:00.000Z","level":"debug","event":"wallet_lock_acquired","instanceId":"app-2","source":"sqs","correlationId":"demo-request","walletId":"11111111-1111-4111-8111-111111111111","sqlAttempt":1,"durationMs":12}
+```
+
+Use transactionId para acompanhar a identidade persistida entre instâncias; operationId pode identificar somente uma tentativa. CorrelationId do replay identifica o pedido atual, enquanto a outbox preserva a correlação original. O worker de referências pode usar transactionId como sua correlação; não procure toda a recuperação somente pelo correlationId inicial. Tentativa SQL usa sqlAttempt, separada de attempt de entrega/publicação.
+
+`outbox_event_published` com stage=broker_confirmed confirma o broker e pode preceder falha/rollback dos metadados. `outbox_publication_committed` com stage=metadata_committed confirma o retorno bem-sucedido da transação de publicação. EventId permanece estável na recuperação. WalletBalanceChanged permite correlação por transactionId, sem providerId próprio nem consulta adicional para enriquecer o log.
+
+Falhas de serialização/emissão são isoladas. Erros são classificados sem SQL, ReceiptHandle, stack, credenciais ou corpo financeiro; não use DEBUG como justificativa para registrar esses dados. DEBUG aumenta volume e custo, e não deve ficar ligado indiscriminadamente durante medição de carga.
+
 ## Recursos das execuções distribuídas
 
 Os comandos para iniciar a suíte estão no [README](../README.md#testes-e-resultados). Ela recria temporariamente as três aplicações e exige acesso Docker e permissão CREATEDB, mas não recria PostgreSQL/LocalStack. Execute sem outros processos que alterem essas aplicações.

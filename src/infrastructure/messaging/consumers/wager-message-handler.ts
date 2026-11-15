@@ -54,11 +54,15 @@ export class WagerMessageHandler {
         causationId: message.causationId ?? messageId,
         walletId: message.data.walletId,
         providerId: message.data.providerId,
+        externalTransactionId: message.data.externalTransactionId,
+        kind: message.data.kind,
+        source: 'sqs',
       });
       signal.throwIfAborted();
       const result = await transactionCancellation.run(signal, () =>
         this.process.execute({
           providerId: message.data.providerId,
+          source: 'sqs',
           externalTransactionId: message.data.externalTransactionId,
           idempotencyKey: message.data.idempotencyKey,
           walletId: message.data.walletId,
@@ -83,6 +87,7 @@ export class WagerMessageHandler {
       committed = result.canAcknowledge;
       await settled();
       Object.assign(fields, {
+        durationMs: performance.now() - started,
         transactionId: result.transactionId,
         status: result.status,
         failureCode: result.failureCode,

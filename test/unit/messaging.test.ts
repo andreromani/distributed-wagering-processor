@@ -789,3 +789,67 @@ for (const unconfirmed of [
     },
   );
 }
+
+test('SQS financial result is enriched and a failed log sink cannot lose ACK', async () => {
+  const records: Readonly<Record<string, unknown>>[] = [];
+  const q = queueFixture();
+  const handler = new WagerMessageHandler(
+    { execute: async () => result },
+    q.queue,
+    options,
+    new MessagingDiagnostics((record) => {
+      records.push(record);
+    }),
+  );
+  await handler.handle(delivery, signal());
+  expect(
+    records.find((record) => record.event === 'financial_result'),
+  ).toMatchObject({
+    source: 'sqs',
+    kind: 'BET',
+    externalTransactionId: envelope.data.externalTransactionId,
+    durationMs: expect.any(Number),
+    level: 'info',
+  });
+  const broken = new WagerMessageHandler(
+    { execute: async () => result },
+    q.queue,
+    options,
+    new MessagingDiagnostics(() => {
+      throw new Error('sink unavailable');
+    }),
+  );
+  await broken.handle(delivery, signal());
+  expect(q.acks).toHaveLength(2);
+  const invalid = new WagerMessageHandler(
+    {
+      execute: async () => {
+        throw new Error('must not process');
+      },
+    },
+    q.queue,
+    options,
+    new MessagingDiagnostics((record) => {
+      records.push(record);
+    }),
+  );
+  await invalid.handle(
+    {
+      ...delivery,
+      body: JSON.stringify({
+        ...envelope,
+        data: {
+          ...envelope.data,
+          providerId: 'untrusted',
+          money: { amount: 1, currency: 'BRL' },
+        },
+      }),
+    },
+    signal(),
+  );
+  const dead = records.find(
+    (record) => record.event === 'message_dead_lettered',
+  );
+  expect(dead).not.toHaveProperty('providerId');
+  expect(dead).not.toHaveProperty('walletId');
+});

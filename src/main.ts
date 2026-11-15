@@ -4,16 +4,11 @@ import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module.js';
 import { ApplicationLogger } from './infrastructure/observability/application-logger.js';
+import { JsonLog } from './infrastructure/observability/json-log.js';
 
 const logger = new ApplicationLogger();
 process.once('SIGTERM', () => {
-  console.log(
-    JSON.stringify({
-      event: 'signal_received',
-      signal: 'SIGTERM',
-      instanceId: environment().instanceId,
-    }),
-  );
+  new JsonLog().emit('info', 'signal_received', { signal: 'SIGTERM' });
 });
 
 if (environment().workers.httpEnabled) {
